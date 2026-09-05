@@ -1,15 +1,11 @@
-"""Authenticated GitHub tools for FRIDAY.
-
-The GitHub PAT is read only from GITHUB_PAT and is never accepted as a tool
-argument or returned in tool output. Repository access follows the permissions
-of the configured GitHub identity.
-"""
+"""Authenticated GitHub tools for FRIDAY."""
 
 from __future__ import annotations
 
+import base64
 import os
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 from langchain.tools import tool
@@ -71,9 +67,7 @@ def _repo_summary(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _truncate(text: str, limit: int = MAX_FILE_CHARS) -> str:
-    if len(text) <= limit:
-        return text
-    return text[:limit] + f"\n\n[OUTPUT TRUNCATED - MAX {limit} CHARACTERS]"
+    return text if len(text) <= limit else text[:limit] + f"\n\n[OUTPUT TRUNCATED - MAX {limit} CHARACTERS]"
 
 
 async def _request(path: str, params: dict[str, Any] | None = None) -> Any:
@@ -85,9 +79,11 @@ async def _request(path: str, params: dict[str, Any] | None = None) -> Any:
         "User-Agent": "FRIDAY-Personal-AI",
     }
     timeout = httpx.Timeout(20.0, connect=7.0, read=20.0, write=20.0, pool=10.0)
-
     async with httpx.AsyncClient(base_url=GITHUB_API, headers=headers, timeout=timeout) as client:
-        response = await client.get(path, params=params)
+        try:
+            response = await client.get(path, params=params)
+        except httpx.RequestError as error:
+            raise RuntimeError(f"GitHub network request failed: {error}") from error
         if response.status_code >= 400:
             try:
                 detail = response.json().get("message", "GitHub request failed")
@@ -103,40 +99,22 @@ async def github_get_profile(username: str | None = None) -> dict[str, Any]:
     target = (username or configured_username).strip()
     data = await _request("/user" if target.lower() == configured_username.lower() else f"/users/{target}")
     return {
-        "login": data.get("login"),
-        "name": data.get("name"),
-        "bio": data.get("bio"),
-        "company": data.get("company"),
-        "location": data.get("location"),
-        "public_repos": data.get("public_repos", 0),
-        "private_repos": data.get("total_private_repos"),
-        "owned_private_repos": data.get("owned_private_repos"),
-        "followers": data.get("followers", 0),
-        "following": data.get("following", 0),
-        "html_url": data.get("html_url"),
+        "login": data.get("login"), "name": data.get("name"), "bio": data.get("bio"),
+        "company": data.get("company"), "location": data.get("location"),
+        "public_repos": data.get("public_repos", 0), "private_repos": data.get("total_private_repos"),
+        "owned_private_repos": data.get("owned_private_repos"), "followers": data.get("followers", 0),
+        "following": data.get("following", 0), "html_url": data.get("html_url"),
     }
 
 
-async def github_list_repositories(
-    username: str | None = None,
-    limit: int = 100,
-    sort: str = "pushed",
-    page: int = 1,
-) -> list[dict[str, Any]]:
-    """List accessible repositories, including private repositories for the authenticated account."""
+async def github_list_repositories(username: str | None = None, limit: int = 100, sort: str = "pushed", page: int = 1) -> list[dict[str, Any]]:
+    """List repositories accessible to the authenticated account, including permitted private repositories."""
     configured_username, _ = _credentials()
     target = (username or configured_username).strip()
     limit = max(1, min(limit, MAX_PAGE_SIZE))
     page = max(1, page)
     path = "/user/repos" if target.lower() == configured_username.lower() else f"/users/{target}/repos"
-    params = {
-        "type": "all",
-        "sort": sort,
-        "direction": "desc",
-        "per_page": limit,
-        "page": page,
-    }
-    data = await _request(path, params)
+    data = await _request(path, {"type": "all", "sort": sort, "direction": "desc", "per_page": limit, "page": page})
     return [_repo_summary(item) for item in data]
 
 
@@ -144,16 +122,11 @@ async def github_get_repository(repository: str) -> dict[str, Any]:
     """Fetch detailed metadata for owner/name, a repository name, or a GitHub repository URL."""
     data = await _request(f"/repos/{_repo_name(repository)}")
     summary = _repo_summary(data)
-    summary.update(
-        {
-            "homepage": data.get("homepage"),
-            "created_at": data.get("created_at"),
-            "license": (data.get("license") or {}).get("spdx_id"),
-            "topics": data.get("topics", []),
-            "owner": (data.get("owner") or {}).get("login"),
-            "permissions": data.get("permissions", {}),
-        }
-    )
+    summary.update({
+        "homepage": data.get("homepage"), "created_at": data.get("created_at"),
+        "license": (data.get("license") or {}).get("spdx_id"), "topics": data.get("topics", []),
+        "owner": (data.get("owner") or {}).get("login"), "permissions": data.get("permissions", {}),
+    })
     return summary
 
 
@@ -161,80 +134,49 @@ async def github_list_commits(repository: str, limit: int = 20, page: int = 1) -
     """Fetch recent commits from a repository."""
     limit = max(1, min(limit, MAX_PAGE_SIZE))
     page = max(1, page)
-    data = await _request(
-        f"/repos/{_repo_name(repository)}/commits",
-        {"per_page": limit, "page": page},
-    )
-    return [
-        {
-            "sha": item.get("sha"),
-            "message": (item.get("commit") or {}).get("message", "").split("\n", 1)[0],
-            "author": (item.get("author") or {}).get("login")
-            or (item.get("commit") or {}).get("author", {}).get("name"),
-            "date": (item.get("commit") or {}).get("author", {}).get("date"),
-            "html_url": item.get("html_url"),
-        }
-        for item in data
-    ]
+    data = await _request(f"/repos/{_repo_name(repository)}/commits", {"per_page": limit, "page": page})
+    return [{
+        "sha": item.get("sha"),
+        "message": (item.get("commit") or {}).get("message", "").split("\n", 1)[0],
+        "author": (item.get("author") or {}).get("login") or (item.get("commit") or {}).get("author", {}).get("name"),
+        "date": (item.get("commit") or {}).get("author", {}).get("date"),
+        "html_url": item.get("html_url"),
+    } for item in data]
 
 
 async def github_get_contents(repository: str, path: str = "", ref: str | None = None) -> Any:
-    """Fetch a repository path. Returns file metadata/content or a directory listing."""
+    """Fetch a repository file or directory listing at an optional branch, tag, or commit."""
     repo = _repo_name(repository)
     clean_path = path.strip().lstrip("/")
-    endpoint = f"/repos/{repo}/contents/{clean_path}" if clean_path else f"/repos/{repo}/contents"
+    endpoint = f"/repos/{repo}/contents/{quote(clean_path, safe='/')}" if clean_path else f"/repos/{repo}/contents"
     data = await _request(endpoint, {"ref": ref} if ref else None)
-
     if isinstance(data, list):
-        return [
-            {
-                "name": item.get("name"),
-                "path": item.get("path"),
-                "type": item.get("type"),
-                "size": item.get("size"),
-                "sha": item.get("sha"),
-                "download_url": item.get("download_url"),
-                "html_url": item.get("html_url"),
-            }
-            for item in data
-        ]
+        return [{
+            "name": item.get("name"), "path": item.get("path"), "type": item.get("type"),
+            "size": item.get("size"), "sha": item.get("sha"), "download_url": item.get("download_url"),
+            "html_url": item.get("html_url"),
+        } for item in data]
 
     content = data.get("content") or ""
-    encoding = data.get("encoding")
-    if encoding == "base64":
-        import base64
-
+    if data.get("encoding") == "base64":
         try:
-            decoded = base64.b64decode(content).decode("utf-8")
+            content = base64.b64decode(content).decode("utf-8")
         except UnicodeDecodeError:
             return {
-                "type": data.get("type"),
-                "name": data.get("name"),
-                "path": data.get("path"),
-                "sha": data.get("sha"),
-                "size": data.get("size"),
-                "binary": True,
-                "message": "File is not UTF-8 text and was not decoded.",
-                "html_url": data.get("html_url"),
+                "type": data.get("type"), "name": data.get("name"), "path": data.get("path"),
+                "sha": data.get("sha"), "size": data.get("size"), "binary": True,
+                "message": "File is not UTF-8 text and was not decoded.", "html_url": data.get("html_url"),
                 "download_url": data.get("download_url"),
             }
-        content = decoded
-
     return {
-        "type": data.get("type"),
-        "name": data.get("name"),
-        "path": data.get("path"),
-        "sha": data.get("sha"),
-        "size": data.get("size"),
-        "encoding": "utf-8",
-        "content": _truncate(content),
-        "html_url": data.get("html_url"),
-        "download_url": data.get("download_url"),
+        "type": data.get("type"), "name": data.get("name"), "path": data.get("path"),
+        "sha": data.get("sha"), "size": data.get("size"), "encoding": "utf-8",
+        "content": _truncate(content), "html_url": data.get("html_url"), "download_url": data.get("download_url"),
     }
 
 
 async def github_read_file(repository: str, path: str, ref: str | None = None) -> dict[str, Any]:
-    """Read one text file from a repository at an optional branch/tag/commit."""
+    """Read one text file from an accessible repository."""
     result = await github_get_contents(repository, path, ref)
     if not isinstance(result, dict) or result.get("type") != "file":
         raise ValueError(f"Path is not a file: {path}")
@@ -250,7 +192,7 @@ async def github_list_directory(repository: str, path: str = "", ref: str | None
 
 
 async def github_get_file_metadata(repository: str, path: str, ref: str | None = None) -> dict[str, Any]:
-    """Return metadata for one repository file without requiring the caller to parse raw API data."""
+    """Return repository file metadata without returning the file body."""
     result = await github_get_contents(repository, path, ref)
     if not isinstance(result, dict):
         raise ValueError(f"Path is not a file: {path}")
@@ -261,34 +203,29 @@ async def github_get_file_metadata(repository: str, path: str, ref: str | None =
 
 
 async def github_get_tree(repository: str, ref: str | None = None, recursive: bool = True) -> list[dict[str, Any]]:
-    """Return the repository git tree, optionally recursively, for a branch/tag/commit."""
+    """Return the Git tree for a repository ref."""
     repo = _repo_name(repository)
-    metadata = await _request(f"/repos/{repo}")
-    target_ref = ref or metadata.get("default_branch")
-    branch = await _request(f"/repos/{repo}/git/ref/heads/{target_ref}")
-    commit_sha = (((branch.get("object") or {}).get("sha")) if isinstance(branch, dict) else None)
-    if not commit_sha:
-        raise RuntimeError(f"Could not resolve repository ref: {target_ref}")
-    commit = await _request(f"/repos/{repo}/git/commits/{commit_sha}")
-    tree_sha = ((commit.get("tree") or {}).get("sha"))
+    target_ref = ref or (await _request(f"/repos/{repo}")).get("default_branch") or "main"
+    try:
+        commit_data = await _request(f"/repos/{repo}/commits/{quote(target_ref, safe='')}")
+    except RuntimeError:
+        ref_data = await _request(f"/repos/{repo}/git/ref/heads/{quote(target_ref, safe='')}")
+        commit_sha = ((ref_data.get("object") or {}).get("sha"))
+        if not commit_sha:
+            raise RuntimeError(f"Could not resolve repository ref: {target_ref}")
+        commit_data = await _request(f"/repos/{repo}/git/commits/{commit_sha}")
+    tree_sha = ((commit_data.get("commit") or {}).get("tree") or {}).get("sha") or ((commit_data.get("tree") or {}).get("sha"))
     if not tree_sha:
-        raise RuntimeError("Could not resolve repository tree.")
+        raise RuntimeError(f"Could not resolve repository tree for: {target_ref}")
     data = await _request(f"/repos/{repo}/git/trees/{tree_sha}", {"recursive": "1"} if recursive else None)
-    return [
-        {
-            "path": item.get("path"),
-            "mode": item.get("mode"),
-            "type": item.get("type"),
-            "sha": item.get("sha"),
-            "size": item.get("size"),
-            "url": item.get("url"),
-        }
-        for item in data.get("tree", [])
-    ]
+    return [{
+        "path": item.get("path"), "mode": item.get("mode"), "type": item.get("type"),
+        "sha": item.get("sha"), "size": item.get("size"), "url": item.get("url"),
+    } for item in data.get("tree", [])]
 
 
 async def github_search_code(query: str, repository: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
-    """Search repository code using GitHub code search."""
+    """Search GitHub code, optionally scoped to one repository."""
     limit = max(1, min(limit, MAX_PAGE_SIZE))
     search_query = query.strip()
     if not search_query:
@@ -296,65 +233,39 @@ async def github_search_code(query: str, repository: str | None = None, limit: i
     if repository:
         search_query = f"{search_query} repo:{_repo_name(repository)}"
     data = await _request("/search/code", {"q": search_query, "per_page": limit})
-    return [
-        {
-            "name": item.get("name"),
-            "path": item.get("path"),
-            "sha": item.get("sha"),
-            "repository": (item.get("repository") or {}).get("full_name"),
-            "html_url": item.get("html_url"),
-        }
-        for item in data.get("items", [])
-    ]
+    return [{
+        "name": item.get("name"), "path": item.get("path"), "sha": item.get("sha"),
+        "repository": (item.get("repository") or {}).get("full_name"), "html_url": item.get("html_url"),
+    } for item in data.get("items", [])]
 
 
 async def github_list_branches(repository: str, limit: int = 100, page: int = 1) -> list[dict[str, Any]]:
-    """List branches available in a repository."""
+    """List repository branches."""
     limit = max(1, min(limit, MAX_PAGE_SIZE))
     page = max(1, page)
     data = await _request(f"/repos/{_repo_name(repository)}/branches", {"per_page": limit, "page": page})
-    return [
-        {
-            "name": item.get("name"),
-            "protected": item.get("protected"),
-            "sha": ((item.get("commit") or {}).get("sha")),
-        }
-        for item in data
-    ]
+    return [{"name": item.get("name"), "protected": item.get("protected"), "sha": (item.get("commit") or {}).get("sha")} for item in data]
 
 
 async def github_get_commit(repository: str, sha: str = "") -> dict[str, Any]:
-    """Fetch one commit and its changed-file summary."""
+    """Fetch one commit with metadata, stats, and changed-file patches."""
     repo = _repo_name(repository)
-    target = sha.strip() or "HEAD"
-    if target == "HEAD":
-        target = (await _request(f"/repos/{repo}")).get("default_branch") or target
-    data = await _request(f"/repos/{repo}/commits/{target}")
+    target = sha.strip() or (await _request(f"/repos/{repo}")).get("default_branch") or "HEAD"
+    data = await _request(f"/repos/{repo}/commits/{quote(target, safe='')}")
     return {
-        "sha": data.get("sha"),
-        "message": (data.get("commit") or {}).get("message", ""),
+        "sha": data.get("sha"), "message": (data.get("commit") or {}).get("message", ""),
         "author": (data.get("author") or {}).get("login") or (data.get("commit") or {}).get("author", {}).get("name"),
-        "date": (data.get("commit") or {}).get("author", {}).get("date"),
-        "html_url": data.get("html_url"),
+        "date": (data.get("commit") or {}).get("author", {}).get("date"), "html_url": data.get("html_url"),
         "stats": data.get("stats", {}),
-        "files": [
-            {
-                "filename": file.get("filename"),
-                "status": file.get("status"),
-                "additions": file.get("additions"),
-                "deletions": file.get("deletions"),
-                "changes": file.get("changes"),
-                "patch": _truncate(file.get("patch") or "", 30_000),
-                "raw_url": file.get("raw_url"),
-                "blob_url": file.get("blob_url"),
-            }
-            for file in (data.get("files") or [])
-        ],
+        "files": [{
+            "filename": file.get("filename"), "status": file.get("status"), "additions": file.get("additions"),
+            "deletions": file.get("deletions"), "changes": file.get("changes"),
+            "patch": _truncate(file.get("patch") or "", 30_000), "raw_url": file.get("raw_url"), "blob_url": file.get("blob_url"),
+        } for file in (data.get("files") or [])],
     }
 
 
-# LangChain tool objects. Positional names are required by the installed LangChain
-# version; the previous tool(..., name=...) syntax caused the startup crash.
+# LangChain v1 expects the tool name as the positional first argument.
 github_get_profile_tool = tool("github_get_profile")(github_get_profile)
 github_list_repositories_tool = tool("github_list_repositories")(github_list_repositories)
 github_get_repository_tool = tool("github_get_repository")(github_get_repository)
