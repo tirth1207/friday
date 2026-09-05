@@ -77,10 +77,10 @@ def _repo_summary(item: dict[str, Any]) -> dict[str, Any]:
 
 
 async def github_get_profile(username: str | None = None) -> dict[str, Any]:
-    """Fetch a GitHub profile using the configured authenticated account."""
+    """Fetch GitHub profile data; use the authenticated profile when no username is supplied."""
     configured_username, _ = _credentials()
     target = (username or configured_username).strip()
-    data = await _request(f"/users/{target}")
+    data = await _request("/user" if target.lower() == configured_username.lower() else f"/users/{target}")
     return {
         "login": data.get("login"),
         "name": data.get("name"),
@@ -88,6 +88,8 @@ async def github_get_profile(username: str | None = None) -> dict[str, Any]:
         "company": data.get("company"),
         "location": data.get("location"),
         "public_repos": data.get("public_repos", 0),
+        "private_repos": data.get("total_private_repos"),
+        "owned_private_repos": data.get("owned_private_repos"),
         "followers": data.get("followers", 0),
         "following": data.get("following", 0),
         "html_url": data.get("html_url"),
@@ -99,19 +101,21 @@ async def github_list_repositories(
     limit: int = 20,
     sort: str = "pushed",
 ) -> list[dict[str, Any]]:
-    """List repositories for the configured GitHub username, newest activity first by default."""
+    """List repositories for the configured user, including private repositories when the PAT permits access."""
     configured_username, _ = _credentials()
     target = (username or configured_username).strip()
     limit = max(1, min(limit, 100))
-    data = await _request(
-        f"/users/{target}/repos",
-        {"type": "all", "sort": sort, "direction": "desc", "per_page": limit},
-    )
+
+    # /user/repos is the authenticated endpoint and can include private repos.
+    # /users/{username}/repos is used when explicitly asking for another user.
+    path = "/user/repos" if target.lower() == configured_username.lower() else f"/users/{target}/repos"
+    params = {"type": "all", "sort": sort, "direction": "desc", "per_page": limit}
+    data = await _request(path, params)
     return [_repo_summary(item) for item in data[:limit]]
 
 
 async def github_get_repository(repository: str) -> dict[str, Any]:
-    """Fetch detailed metadata for one repository such as owner/name or a repository name."""
+    """Fetch detailed metadata for one GitHub repository such as owner/name or a repository name."""
     data = await _request(f"/repos/{_repo_name(repository)}")
     summary = _repo_summary(data)
     summary.update(
@@ -146,8 +150,8 @@ async def github_list_commits(repository: str, limit: int = 10) -> list[dict[str
     ]
 
 
-# LangChain tool objects. The raw async functions remain available to FRIDAY's
-# existing registry, while these objects provide typed tool schemas for agents.
+# LangChain tool objects provide schemas for specialized agents, while the raw
+# async functions remain compatible with FRIDAY's existing tool registry.
 github_get_profile_tool = tool(github_get_profile, name="github_get_profile")
 github_list_repositories_tool = tool(github_list_repositories, name="github_list_repositories")
 github_get_repository_tool = tool(github_get_repository, name="github_get_repository")
