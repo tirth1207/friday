@@ -86,6 +86,31 @@ def _has_local_path(clean: str) -> bool:
     return any(re.search(pattern, clean) for pattern in patterns)
 
 
+def _is_github_repository_list_request(message: str) -> bool:
+    clean = " ".join(message.strip().lower().split())
+    has_repo_target = _contains_term(clean, ("github", "repo", "repos", "repository", "repositories"))
+    has_list_action = _contains_term(clean, ("fetch", "get", "list", "show", "retrieve", "find"))
+    return has_repo_target and has_list_action and not _contains_term(clean, ("commit", "commits", "file", "files", "branch", "branches", "issue", "issues"))
+
+
+def _is_github_repository_ranking_request(message: str) -> bool:
+    clean = " ".join(message.strip().lower().split())
+    return _contains_term(clean, ("github", "repo", "repos", "repository", "repositories")) and _contains_term(clean, ("rank", "ranking", "top", "best", "compare"))
+
+
+def _format_repository_list(repositories: list[dict[str, Any]]) -> str:
+    if not repositories:
+        return "I fetched your GitHub repositories successfully, but GitHub returned no repositories."
+    lines = [f"I fetched **{len(repositories)} GitHub repositories**:\n"]
+    for index, repo in enumerate(repositories, 1):
+        name = repo.get("full_name") or repo.get("name") or "unknown"
+        visibility = "private" if repo.get("private") else "public"
+        language = repo.get("language") or "—"
+        stars = repo.get("stars", 0)
+        lines.append(f"{index}. **{name}** · {visibility} · {language} · ★ {stars}")
+    return "\n".join(lines)
+
+
 def is_tool_required(message: str) -> bool:
     clean = " ".join(message.strip().lower().split())
     if not clean:
@@ -108,11 +133,8 @@ def is_tool_required(message: str) -> bool:
     if github_url or (_contains_term(clean, GITHUB_TARGET_TERMS) and has_github_action) or (owner_repo and has_github_action):
         return True
 
-    # Natural-language repository requests such as "rank all my repos" do not
-    # always contain the word GitHub. Treat repo/repositories as GitHub intent
-    # when the user is asking for an action that needs repository data.
     if _contains_term(clean, ("repo", "repos", "repository", "repositories")) and _contains_term(
-        clean, ("rank", "ranking", "top", "list", "show", "get", "compare", "analyze", "analyse")
+        clean, ("rank", "ranking", "top", "list", "show", "get", "compare", "analyze", "analyse", "fetch", "retrieve")
     ):
         return True
 
@@ -228,7 +250,6 @@ async def ask_friday(message: str) -> str:
     resolved_request = context["resolved_request"]
     recent_messages = context["recent_messages"]
 
-    # Store the raw message first so future turns can refer to it.
     memory_store.add_message("user", message)
 
     if not is_tool_required(resolved_request):
@@ -242,6 +263,33 @@ async def ask_friday(message: str) -> str:
         event_type="thinking", title="Understanding request",
         description="Checking which capability is required.", status="running",
     )
+
+    # Deterministic GitHub repository listing is a capability lookup, not a planning
+    # problem. Execute it before any LLM call so NVIDIA outages cannot prevent the
+    # actual GitHub operation.
+    if _is_github_repository_list_request(resolved_request):
+        github_agent = GitHubAgent()
+        await github_agent.create()
+        await github_agent.start("Fetching GitHub repositories")
+        try:
+            result = await tool_executor.execute(
+                tool_name="github.repositories",
+                arguments={"limit": 100, "sort": "pushed", "page": 1},
+                agent=github_agent.name,
+            )
+            await github_agent.complete("Fetched GitHub repositories.")
+            response = _format_repository_list(result if isinstance(result, list) else [])
+            memory_store.add_message("assistant", response)
+            return response
+        except Exception as error:
+            await agent_runtime.tool_error(
+                agent=github_agent.name,
+                tool="github.repositories",
+                description=str(error),
+            )
+            response = f"I couldn't fetch your GitHub repositories: {error}"
+            memory_store.add_message("assistant", response)
+            return response
 
     planner = PlannerAgent()
     await planner.create()
