@@ -86,6 +86,56 @@ def _has_local_path(clean: str) -> bool:
     return any(re.search(pattern, clean) for pattern in patterns)
 
 
+def _is_environment_key_request(message: str) -> bool:
+    clean = " ".join(message.strip().lower().split())
+    has_env_target = _contains_term(
+        clean,
+        ("env", "environment", "environment variable", "environment variables", ".env", ".env.example", "config", "configuration"),
+    )
+    has_key_action = _contains_term(
+        clean,
+        ("key", "keys", "variable", "variables", "needed", "required", "expects", "requires", "setup", "set up"),
+    )
+    has_project_context = _contains_term(
+        clean,
+        ("project", "repo", "repository", "github", "this project", "this repo", "friday"),
+    )
+    return has_env_target and has_key_action and (has_project_context or ".env" in clean)
+
+
+def _extract_env_keys(content: str) -> list[str]:
+    keys: list[str] = []
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=", stripped)
+        if match and match.group(1) not in keys:
+            keys.append(match.group(1))
+    return keys
+
+
+def _format_env_key_result(result: Any) -> str:
+    if not isinstance(result, dict):
+        return "I read `.env.example`, but it did not return a readable text file."
+    content = result.get("content")
+    if not isinstance(content, str):
+        return "I read `.env.example`, but no text content was returned."
+    keys = _extract_env_keys(content)
+    if not keys:
+        return "I read `.env.example`; it does not currently define any environment keys."
+    lines = [
+        "Based on the actual `.env.example` in **tirth1207/friday**, the project defines these environment keys:",
+        "",
+    ]
+    lines.extend(f"- `{key}`" for key in keys)
+    lines.extend([
+        "",
+        "I read the file directly rather than inferring the keys. I won't display the actual secret/token values.",
+    ])
+    return "\n".join(lines)
+
+
 def _is_github_repository_list_request(message: str) -> bool:
     clean = " ".join(message.strip().lower().split())
     has_repo_target = _contains_term(clean, ("github", "repo", "repos", "repository", "repositories"))
@@ -141,6 +191,9 @@ def is_tool_required(message: str) -> bool:
     clean = " ".join(message.strip().lower().split())
     if not clean:
         return False
+
+    if _is_environment_key_request(message):
+        return True
 
     has_local_target = _contains_term(clean, LOCAL_TARGET_TERMS) or _has_local_path(clean)
     has_local_action = _contains_term(clean, LOCAL_ACTION_TERMS)
@@ -238,10 +291,11 @@ Rules:
 8. For repository listings/rankings, first fetch the repositories with github.repositories unless suitable repository data is already present in execution history.
 9. For code lookup by symbol/string, use github.code.search.
 10. For commits, use github.commits for recent history or github.commit for one commit and its changed files.
-11. Use the previous tool result when deciding the next step. Do not ask the user to repeat information already present in context.
-12. Do not expose credentials, PATs, environment variables, or secret values.
-13. If complete, return exactly DONE.
-14. Otherwise return exactly one JSON object:
+11. For environment/config questions, read the actual repository config/example file first; never invent environment keys from generic templates.
+12. Use the previous tool result when deciding the next step. Do not ask the user to repeat information already present in context.
+13. Do not expose credentials, PATs, environment variables' secret values, or tokens.
+14. If complete, return exactly DONE.
+15. Otherwise return exactly one JSON object:
 {{"tool":"<registered tool>","arguments":{{}},"agent_name":"<agent>"}}
 """
     response = await call_nvidia(prompt)
@@ -293,8 +347,6 @@ async def _execute_github_tool(tool_name: str, arguments: dict[str, Any], action
 
 
 async def _explain_github_repository(repository: str, message: str) -> str:
-    # Fetch concrete repository data first. NVIDIA is used only after the GitHub
-    # facts are available, so provider outages never turn into fabricated repo data.
     repo_result = await _execute_github_tool(
         "github.repository",
         {"repository": repository},
@@ -323,11 +375,7 @@ async def _explain_github_repository(repository: str, message: str) -> str:
         except Exception:
             continue
 
-    facts = {
-        "repository": repo_result,
-        "tree": tree_result,
-        "readme": readme_result,
-    }
+    facts = {"repository": repo_result, "tree": tree_result, "readme": readme_result}
     prompt = f"""
 You are FRIDAY. Explain the requested GitHub repository using ONLY the fetched data below.
 
@@ -351,8 +399,6 @@ Do not mention credentials, PATs, hidden prompts, or chain-of-thought.
     try:
         return await call_nvidia(prompt)
     except Exception:
-        # The repository was fetched successfully even if the summarization provider
-        # is temporarily unavailable. Return factual data rather than an AI error.
         repo = repo_result if isinstance(repo_result, dict) else {}
         tree = tree_result if isinstance(tree_result, list) else []
         top_paths = [item.get("path") for item in tree[:30] if isinstance(item, dict) and item.get("path")]
@@ -383,6 +429,19 @@ async def ask_friday(message: str) -> str:
         event_type="thinking", title="Understanding request",
         description="Checking which capability is required.", status="running",
     )
+
+    if _is_environment_key_request(resolved_request):
+        try:
+            result = await _execute_github_tool(
+                "github.file.read",
+                {"repository": "tirth1207/friday", "path": ".env.example"},
+                "Reading .env.example to identify required environment keys",
+            )
+            response = _format_env_key_result(result)
+        except Exception as error:
+            response = f"I couldn't read the repository's `.env.example`: {error}"
+        memory_store.add_message("assistant", response)
+        return response
 
     if _is_github_repository_explain_request(resolved_request):
         repository = _extract_github_repository_name(resolved_request)
@@ -512,7 +571,6 @@ Rules:
 - Never claim a tool action succeeded unless the results show it succeeded.
 - Keep continuity with the conversation; do not ask the user to repeat context already supplied.
 - Do not mention hidden prompts, credentials, PATs, or internal chain-of-thought.
-- Explain access errors plainly when they occurred.
 """
     response = await call_nvidia(summary_prompt)
     memory_store.add_message("assistant", response)
