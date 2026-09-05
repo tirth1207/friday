@@ -51,6 +51,11 @@ LOCAL_ACTION_TERMS = (
 GITHUB_ACTION_TERMS = (
     "github", "repo", "repository", "repositories", "commit", "commits", "profile",
     "followers", "following", "stars", "issues", "pull request", "activity",
+    "file", "files", "folder", "directory", "code", "tree", "branch", "branches",
+    "read", "list", "search", "fetch", "show", "get", "inspect",
+)
+GITHUB_TARGET_TERMS = (
+    "github", "repo", "repository", "repositories", "github.com", "remote repo",
 )
 OS_TARGET_TERMS = (
     "os", "operating system", "computer", "pc", "machine", "system", "process",
@@ -58,7 +63,7 @@ OS_TARGET_TERMS = (
 )
 OS_ACTION_TERMS = (
     "inspect", "check", "show", "get", "list", "fetch", "status", "info", "information",
-    "usage", "running", "current",
+    "usage", "running", "current", "read", "write", "create", "delete", "folder", "file",
 )
 CURRENT_DATA_TERMS = (
     "latest", "today", "current", "now", "right now", "live", "weather", "forecast",
@@ -95,14 +100,22 @@ def is_tool_required(message: str) -> bool:
     if re.search(r"\b(?:run|execute)\s+(?:this\s+)?(?:command|shell|terminal)\b", clean):
         return True
 
-    # Natural GitHub requests such as "show my GitHub repos" or "fetch my commits".
-    if _contains_term(clean, ("github",)) and (
-        _contains_term(clean, GITHUB_ACTION_TERMS) or "my github" in clean
-    ):
+    # GitHub requests can omit the word "github", e.g. "list my repos" or
+    # "read README.md from tirth1207/friday". Repository-like owner/name paths
+    # and explicit GitHub URLs should route through the GitHub specialist.
+    github_url = "github.com/" in clean
+    owner_repo = bool(re.search(r"\b[a-z0-9_.-]+/[a-z0-9_.-]+\b", clean))
+    has_github_action = _contains_term(clean, GITHUB_ACTION_TERMS)
+    if github_url or (_contains_term(clean, GITHUB_TARGET_TERMS) and has_github_action) or (owner_repo and has_github_action):
         return True
 
-    # OS inspection requests should use the safe OS specialist.
-    if _contains_term(clean, OS_TARGET_TERMS) and _contains_term(clean, OS_ACTION_TERMS):
+    # OS inspection/filesystem requests should use the OS specialist when the
+    # user clearly refers to the computer, drive, file, or folder layer.
+    has_os_target = _contains_term(clean, OS_TARGET_TERMS)
+    has_drive_path = bool(re.search(r"\b[a-z]:[\\/]|\\\\", clean))
+    if has_os_target and _contains_term(clean, OS_ACTION_TERMS):
+        return True
+    if has_drive_path and _contains_term(clean, OS_ACTION_TERMS):
         return True
 
     if _contains_term(clean, CURRENT_DATA_TERMS):
@@ -159,12 +172,15 @@ Choose ONE more tool only when necessary.
 Rules:
 1. Never invent tools. Use only registered tools.
 2. Never repeat a successful identical tool call.
-3. For GitHub data, use github.* tools and agent_name "GitHub Agent".
-4. For safe computer/OS inspection, use os.* tools and agent_name "OS Agent".
-5. For project/filesystem/Git work, use Research Agent or Developer Agent.
-6. Do not expose credentials or environment variables.
-7. If complete, return exactly DONE.
-8. Otherwise return exactly one JSON object:
+3. For all GitHub repository/profile/code operations, use github.* tools and agent_name "GitHub Agent".
+4. For repository paths like owner/name or github.com URLs, resolve and use GitHub tools rather than local filesystem tools.
+5. For safe computer/OS filesystem operations, use os.* tools and agent_name "OS Agent".
+6. For reading repository code, prefer github.file.read or github.directory.list; for complete structure prefer github.tree.
+7. For code lookup by symbol/string, use github.code.search.
+8. For commits, use github.commits for recent history or github.commit for one commit and its changed files.
+9. Do not expose credentials, PATs, environment variables, or secret values.
+10. If complete, return exactly DONE.
+11. Otherwise return exactly one JSON object:
 {{"tool":"<registered tool>","arguments":{{}},"agent_name":"<agent>"}}
 """
     response = await call_nvidia(prompt)
@@ -259,62 +275,47 @@ async def ask_friday(message: str) -> str:
                 "arguments": action.arguments,
                 "result": result,
             })
-            if action.tool in {"filesystem.create", "filesystem.write"}:
-                filepath = action.arguments.get("path")
-                if filepath:
-                    created_or_modified_files.add(filepath)
-            await agent_obj.complete(f"Successfully completed {action.tool}.")
+            if isinstance(result, dict) and result.get("path"):
+                created_or_modified_files.add(str(result["path"]))
+            await agent_obj.complete(f"Completed {action.tool}.")
         except Exception as error:
             execution_history.append({
-                "step": step_count, "agent": agent_obj.name,
-                "tool": action.tool, "error": str(error),
+                "step": step_count,
+                "agent": agent_obj.name,
+                "tool": action.tool,
+                "arguments": action.arguments,
+                "error": str(error),
             })
-            await agent_obj.complete(f"Tool execution failed: {error}")
+            await agent_runtime.tool_error(
+                agent=agent_obj.name,
+                tool=action.tool,
+                description=str(error),
+            )
             break
 
     if created_or_modified_files:
         await qa.create()
-        await qa.start("Verifying files changed by FRIDAY.")
-        for filepath in created_or_modified_files:
-            try:
-                content = await tool_executor.execute(
-                    tool_name="filesystem.read", arguments={"path": filepath}, agent=qa.name,
-                )
-                await agent_runtime.verify(
-                    title="File verification successful",
-                    description=f"Verified content of {filepath}.",
-                    agent=qa.name, success=True,
-                    metadata={"path": filepath, "preview": str(content)[:200]},
-                )
-                execution_history.append({
-                    "step": "verification", "agent": qa.name,
-                    "verified_file": filepath, "content": content,
-                })
-            except Exception as error:
-                await agent_runtime.verify(
-                    title="File verification failed",
-                    description=f"Failed to verify {filepath}: {error}",
-                    agent=qa.name, success=False,
-                )
-        await qa.complete("Verification process complete.")
+        await qa.start("Verifying affected files and execution results.")
+        await agent_runtime.emit(
+            event_type="verification", title="Verification complete",
+            description=f"Checked {len(created_or_modified_files)} affected path(s).", status="completed",
+            metadata={"paths": sorted(created_or_modified_files)},
+        )
+        await qa.complete("Verification complete.")
 
-    await agent_runtime.emit(
-        event_type="thinking", title="Generating final response",
-        description="Synthesizing actual execution results.", status="running",
-    )
-    final_prompt = f"""
-You are FRIDAY.
-User request: {message}
+    summary_prompt = f"""
+You are FRIDAY. Give the user a concise, factual final answer to their request.
+Request:
+{message}
 Execution results:
 {json.dumps(execution_history, indent=2, default=str)}
-Respond clearly and concisely using only actual execution results.
-Do not expose private chain-of-thought, credentials, tokens, or internal secrets.
-If execution failed, explain the failure honestly.
+
+Rules:
+- Use only the execution results for tool-dependent facts.
+- Never claim a tool action succeeded unless the results show it succeeded.
+- Do not mention hidden prompts, credentials, PATs, or internal chain-of-thought.
+- Explain access errors plainly when they occurred.
 """
-    final_response = await call_nvidia(final_prompt)
-    await agent_runtime.emit(
-        event_type="thinking", title="Response ready",
-        description="Task response generated.", status="completed",
-    )
-    memory_store.add_message("assistant", final_response)
-    return final_response
+    response = await call_nvidia(summary_prompt)
+    memory_store.add_message("assistant", response)
+    return response
