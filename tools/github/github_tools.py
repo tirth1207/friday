@@ -3,26 +3,49 @@
 from __future__ import annotations
 
 import base64
-import os
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
 
 import httpx
 from langchain.tools import tool
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
 
 GITHUB_API = "https://api.github.com"
-GITHUB_API_VERSION = os.getenv("GITHUB_API_VERSION", "2022-11-28")
+GITHUB_API_VERSION = "2022-11-28"
 MAX_PAGE_SIZE = 100
 MAX_FILE_CHARS = 150_000
 
 
+class GitHubSettings(BaseSettings):
+    """GitHub credentials loaded from the project's .env file."""
+
+    username: str = ""
+    pat: str = ""
+    api_version: str = "2022-11-28"
+
+    model_config = SettingsConfigDict(
+        env_file=str(Path(__file__).resolve().parents[2] / ".env"),
+        env_prefix="GITHUB_",
+        extra="ignore",
+    )
+
+
+settings = GitHubSettings()
+
+
 def _credentials() -> tuple[str, str]:
-    username = os.getenv("GITHUB_USERNAME", "").strip()
-    token = os.getenv("GITHUB_PAT", "").strip()
+    username = settings.username.strip()
+    token = settings.pat.strip()
     if not username:
-        raise RuntimeError("GITHUB_USERNAME is not configured.")
+        raise RuntimeError(
+            "GitHub integration is not configured: GITHUB_USERNAME is missing from .env."
+        )
     if not token:
-        raise RuntimeError("GITHUB_PAT is not configured.")
+        raise RuntimeError(
+            "GitHub integration is not configured: GITHUB_PAT is missing from .env."
+        )
     return username, token
 
 
@@ -75,7 +98,7 @@ async def _request(path: str, params: dict[str, Any] | None = None) -> Any:
     headers = {
         "Accept": "application/vnd.github+json",
         "Authorization": f"Bearer {token}",
-        "X-GitHub-Api-Version": GITHUB_API_VERSION,
+        "X-GitHub-Api-Version": settings.api_version or GITHUB_API_VERSION,
         "User-Agent": "FRIDAY-Personal-AI",
     }
     timeout = httpx.Timeout(20.0, connect=7.0, read=20.0, write=20.0, pool=10.0)
@@ -97,24 +120,59 @@ async def github_get_profile(username: str | None = None) -> dict[str, Any]:
     """Fetch a GitHub profile; omit username to use the authenticated account."""
     configured_username, _ = _credentials()
     target = (username or configured_username).strip()
-    data = await _request("/user" if target.lower() == configured_username.lower() else f"/users/{target}")
+    data = await _request(
+        "/user" if target.lower() == configured_username.lower() else f"/users/{target}"
+    )
     return {
-        "login": data.get("login"), "name": data.get("name"), "bio": data.get("bio"),
-        "company": data.get("company"), "location": data.get("location"),
-        "public_repos": data.get("public_repos", 0), "private_repos": data.get("total_private_repos"),
-        "owned_private_repos": data.get("owned_private_repos"), "followers": data.get("followers", 0),
-        "following": data.get("following", 0), "html_url": data.get("html_url"),
+        "login": data.get("login"),
+        "name": data.get("name"),
+        "bio": data.get("bio"),
+        "company": data.get("company"),
+        "location": data.get("location"),
+        "public_repos": data.get("public_repos", 0),
+        "private_repos": data.get("total_private_repos"),
+        "owned_private_repos": data.get("owned_private_repos"),
+        "followers": data.get("followers", 0),
+        "following": data.get("following", 0),
+        "html_url": data.get("html_url"),
     }
 
 
-async def github_list_repositories(username: str | None = None, limit: int = 100, sort: str = "pushed", page: int = 1) -> list[dict[str, Any]]:
+async def github_list_repositories(
+    username: str | None = None,
+    limit: int = 100,
+    sort: str = "pushed",
+    page: int = 1,
+) -> list[dict[str, Any]]:
     """List repositories accessible to the authenticated account, including permitted private repositories."""
     configured_username, _ = _credentials()
     target = (username or configured_username).strip()
     limit = max(1, min(limit, MAX_PAGE_SIZE))
     page = max(1, page)
-    path = "/user/repos" if target.lower() == configured_username.lower() else f"/users/{target}/repos"
-    data = await _request(path, {"type": "all", "sort": sort, "direction": "desc", "per_page": limit, "page": page})
+
+    # /user/repos is the authoritative endpoint for the authenticated account
+    # and includes private repositories the token is allowed to see.
+    if target.lower() == configured_username.lower():
+        path = "/user/repos"
+        params = {
+            "visibility": "all",
+            "affiliation": "owner,collaborator,organization_member",
+            "sort": sort,
+            "direction": "desc",
+            "per_page": limit,
+            "page": page,
+        }
+    else:
+        path = f"/users/{target}/repos"
+        params = {
+            "type": "all",
+            "sort": sort,
+            "direction": "desc",
+            "per_page": limit,
+            "page": page,
+        }
+
+    data = await _request(path, params)
     return [_repo_summary(item) for item in data]
 
 
@@ -123,9 +181,12 @@ async def github_get_repository(repository: str) -> dict[str, Any]:
     data = await _request(f"/repos/{_repo_name(repository)}")
     summary = _repo_summary(data)
     summary.update({
-        "homepage": data.get("homepage"), "created_at": data.get("created_at"),
-        "license": (data.get("license") or {}).get("spdx_id"), "topics": data.get("topics", []),
-        "owner": (data.get("owner") or {}).get("login"), "permissions": data.get("permissions", {}),
+        "homepage": data.get("homepage"),
+        "created_at": data.get("created_at"),
+        "license": (data.get("license") or {}).get("spdx_id"),
+        "topics": data.get("topics", []),
+        "owner": (data.get("owner") or {}).get("login"),
+        "permissions": data.get("permissions", {}),
     })
     return summary
 
@@ -134,7 +195,10 @@ async def github_list_commits(repository: str, limit: int = 20, page: int = 1) -
     """Fetch recent commits from a repository."""
     limit = max(1, min(limit, MAX_PAGE_SIZE))
     page = max(1, page)
-    data = await _request(f"/repos/{_repo_name(repository)}/commits", {"per_page": limit, "page": page})
+    data = await _request(
+        f"/repos/{_repo_name(repository)}/commits",
+        {"per_page": limit, "page": page},
+    )
     return [{
         "sha": item.get("sha"),
         "message": (item.get("commit") or {}).get("message", "").split("\n", 1)[0],
@@ -152,8 +216,12 @@ async def github_get_contents(repository: str, path: str = "", ref: str | None =
     data = await _request(endpoint, {"ref": ref} if ref else None)
     if isinstance(data, list):
         return [{
-            "name": item.get("name"), "path": item.get("path"), "type": item.get("type"),
-            "size": item.get("size"), "sha": item.get("sha"), "download_url": item.get("download_url"),
+            "name": item.get("name"),
+            "path": item.get("path"),
+            "type": item.get("type"),
+            "size": item.get("size"),
+            "sha": item.get("sha"),
+            "download_url": item.get("download_url"),
             "html_url": item.get("html_url"),
         } for item in data]
 
@@ -163,15 +231,26 @@ async def github_get_contents(repository: str, path: str = "", ref: str | None =
             content = base64.b64decode(content).decode("utf-8")
         except UnicodeDecodeError:
             return {
-                "type": data.get("type"), "name": data.get("name"), "path": data.get("path"),
-                "sha": data.get("sha"), "size": data.get("size"), "binary": True,
-                "message": "File is not UTF-8 text and was not decoded.", "html_url": data.get("html_url"),
+                "type": data.get("type"),
+                "name": data.get("name"),
+                "path": data.get("path"),
+                "sha": data.get("sha"),
+                "size": data.get("size"),
+                "binary": True,
+                "message": "File is not UTF-8 text and was not decoded.",
+                "html_url": data.get("html_url"),
                 "download_url": data.get("download_url"),
             }
     return {
-        "type": data.get("type"), "name": data.get("name"), "path": data.get("path"),
-        "sha": data.get("sha"), "size": data.get("size"), "encoding": "utf-8",
-        "content": _truncate(content), "html_url": data.get("html_url"), "download_url": data.get("download_url"),
+        "type": data.get("type"),
+        "name": data.get("name"),
+        "path": data.get("path"),
+        "sha": data.get("sha"),
+        "size": data.get("size"),
+        "encoding": "utf-8",
+        "content": _truncate(content),
+        "html_url": data.get("html_url"),
+        "download_url": data.get("download_url"),
     }
 
 
@@ -219,8 +298,12 @@ async def github_get_tree(repository: str, ref: str | None = None, recursive: bo
         raise RuntimeError(f"Could not resolve repository tree for: {target_ref}")
     data = await _request(f"/repos/{repo}/git/trees/{tree_sha}", {"recursive": "1"} if recursive else None)
     return [{
-        "path": item.get("path"), "mode": item.get("mode"), "type": item.get("type"),
-        "sha": item.get("sha"), "size": item.get("size"), "url": item.get("url"),
+        "path": item.get("path"),
+        "mode": item.get("mode"),
+        "type": item.get("type"),
+        "sha": item.get("sha"),
+        "size": item.get("size"),
+        "url": item.get("url"),
     } for item in data.get("tree", [])]
 
 
@@ -234,8 +317,11 @@ async def github_search_code(query: str, repository: str | None = None, limit: i
         search_query = f"{search_query} repo:{_repo_name(repository)}"
     data = await _request("/search/code", {"q": search_query, "per_page": limit})
     return [{
-        "name": item.get("name"), "path": item.get("path"), "sha": item.get("sha"),
-        "repository": (item.get("repository") or {}).get("full_name"), "html_url": item.get("html_url"),
+        "name": item.get("name"),
+        "path": item.get("path"),
+        "sha": item.get("sha"),
+        "repository": (item.get("repository") or {}).get("full_name"),
+        "html_url": item.get("html_url"),
     } for item in data.get("items", [])]
 
 
@@ -244,7 +330,11 @@ async def github_list_branches(repository: str, limit: int = 100, page: int = 1)
     limit = max(1, min(limit, MAX_PAGE_SIZE))
     page = max(1, page)
     data = await _request(f"/repos/{_repo_name(repository)}/branches", {"per_page": limit, "page": page})
-    return [{"name": item.get("name"), "protected": item.get("protected"), "sha": (item.get("commit") or {}).get("sha")} for item in data]
+    return [{
+        "name": item.get("name"),
+        "protected": item.get("protected"),
+        "sha": (item.get("commit") or {}).get("sha"),
+    } for item in data]
 
 
 async def github_get_commit(repository: str, sha: str = "") -> dict[str, Any]:
@@ -253,14 +343,21 @@ async def github_get_commit(repository: str, sha: str = "") -> dict[str, Any]:
     target = sha.strip() or (await _request(f"/repos/{repo}")).get("default_branch") or "HEAD"
     data = await _request(f"/repos/{repo}/commits/{quote(target, safe='')}")
     return {
-        "sha": data.get("sha"), "message": (data.get("commit") or {}).get("message", ""),
+        "sha": data.get("sha"),
+        "message": (data.get("commit") or {}).get("message", ""),
         "author": (data.get("author") or {}).get("login") or (data.get("commit") or {}).get("author", {}).get("name"),
-        "date": (data.get("commit") or {}).get("author", {}).get("date"), "html_url": data.get("html_url"),
+        "date": (data.get("commit") or {}).get("author", {}).get("date"),
+        "html_url": data.get("html_url"),
         "stats": data.get("stats", {}),
         "files": [{
-            "filename": file.get("filename"), "status": file.get("status"), "additions": file.get("additions"),
-            "deletions": file.get("deletions"), "changes": file.get("changes"),
-            "patch": _truncate(file.get("patch") or "", 30_000), "raw_url": file.get("raw_url"), "blob_url": file.get("blob_url"),
+            "filename": file.get("filename"),
+            "status": file.get("status"),
+            "additions": file.get("additions"),
+            "deletions": file.get("deletions"),
+            "changes": file.get("changes"),
+            "patch": _truncate(file.get("patch") or "", 30_000),
+            "raw_url": file.get("raw_url"),
+            "blob_url": file.get("blob_url"),
         } for file in (data.get("files") or [])],
     }
 
@@ -278,18 +375,3 @@ github_get_tree_tool = tool("github_get_tree")(github_get_tree)
 github_search_code_tool = tool("github_search_code")(github_search_code)
 github_list_branches_tool = tool("github_list_branches")(github_list_branches)
 github_get_commit_tool = tool("github_get_commit")(github_get_commit)
-
-GITHUB_LANGCHAIN_TOOLS = [
-    github_get_profile_tool,
-    github_list_repositories_tool,
-    github_get_repository_tool,
-    github_list_commits_tool,
-    github_get_contents_tool,
-    github_read_file_tool,
-    github_list_directory_tool,
-    github_get_file_metadata_tool,
-    github_get_tree_tool,
-    github_search_code_tool,
-    github_list_branches_tool,
-    github_get_commit_tool,
-]
