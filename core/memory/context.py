@@ -28,13 +28,16 @@ def _looks_like_followup(text: str) -> bool:
     )
 
 
-def resolve_request(message: str) -> dict[str, Any]:
-    """Resolve the current message against persistent conversation/task context.
+def _is_repo_ranking(text: str) -> bool:
+    clean = _clean(text)
+    return (
+        re.search(r"\b(?:repo|repos|repository|repositories)\b", clean) is not None
+        and re.search(r"\b(?:rank|ranking|top|best)\b", clean) is not None
+    )
 
-    The resolver is deterministic so short follow-ups continue to work even if
-    the model provider is unavailable. Substantive requests become the new
-    active task; context-only replies inherit the existing task.
-    """
+
+def resolve_request(message: str) -> dict[str, Any]:
+    """Resolve the current message against persistent conversation/task context."""
     recent = memory_store.get_recent_messages(limit=12)
     previous_user_messages = [m["content"] for m in recent if m["role"] == "user"]
     previous_user = previous_user_messages[-1] if previous_user_messages else ""
@@ -58,8 +61,18 @@ def resolve_request(message: str) -> dict[str, Any]:
         elif previous_user:
             resolved = f"Continue the previous request: {previous_user}. The user's follow-up is: {message.strip()}"
 
-    # Any substantive request becomes the active task. Greetings and pure
-    # follow-ups do not replace the task that is currently in progress.
+    # Make critical GitHub data requirements explicit to the planner. This is
+    # intentionally deterministic: fetching repository data must not depend on
+    # whether the NVIDIA planner happens to emit a tool call.
+    if _is_repo_ranking(resolved):
+        resolved = (
+            f"{resolved}\n\nMANDATORY EXECUTION REQUIREMENT: before ranking, fetch the user's "
+            "GitHub repositories with the registered tool github.repositories. "
+            "Do not answer from memory and do not claim the repository list is empty "
+            "unless that tool actually returns an empty list or a real API error occurs."
+        )
+        platform = "github"
+
     if not is_greeting and not is_followup:
         active_task = message.strip()
 
