@@ -221,16 +221,17 @@ async def os_delete_path(path: str, recursive: bool = False) -> str:
     return f"Successfully deleted: {target}"
 
 
-os_system_info_tool = tool(os_system_info, name="os_system_info")
-os_list_processes_tool = tool(os_list_processes, name="os_list_processes")
-os_disk_usage_tool = tool(os_disk_usage, name="os_disk_usage")
-os_list_drives_tool = tool(os_list_drives, name="os_list_drives")
-os_read_file_tool = tool(os_read_file, name="os_read_file")
-os_write_file_tool = tool(os_write_file, name="os_write_file")
-os_list_directory_tool = tool(os_list_directory, name="os_list_directory")
-os_create_directory_tool = tool(os_create_directory, name="os_create_directory")
-os_path_exists_tool = tool(os_path_exists, name="os_path_exists")
-os_delete_path_tool = tool(os_delete_path, name="os_delete_path")
+# LangChain 1.x: pass the name positionally to the decorator factory.
+os_system_info_tool = tool("os_system_info")(os_system_info)
+os_list_processes_tool = tool("os_list_processes")(os_list_processes)
+os_disk_usage_tool = tool("os_disk_usage")(os_disk_usage)
+os_list_drives_tool = tool("os_list_drives")(os_list_drives)
+os_read_file_tool = tool("os_read_file")(os_read_file)
+os_write_file_tool = tool("os_write_file")(os_write_file)
+os_list_directory_tool = tool("os_list_directory")(os_list_directory)
+os_create_directory_tool = tool("os_create_directory")(os_create_directory)
+os_path_exists_tool = tool("os_path_exists")(os_path_exists)
+os_delete_path_tool = tool("os_path_delete")(os_delete_path)
 
 OS_LANGCHAIN_TOOLS = [
     os_system_info_tool,
