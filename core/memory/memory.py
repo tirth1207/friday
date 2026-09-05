@@ -1,6 +1,5 @@
 import json
 import sqlite3
-from pathlib import Path
 from typing import Any, Optional
 
 from core.runtime.permissions import get_workspace_root
@@ -57,8 +56,7 @@ class MemoryStore:
 
     def add_message(self, role: str, content: str):
         with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
+            conn.execute(
                 "INSERT INTO conversation_history (role, content) VALUES (?, ?)",
                 (role, content),
             )
@@ -74,12 +72,33 @@ class MemoryStore:
             rows = cursor.fetchall()
             return [{"role": row[0], "content": row[1]} for row in reversed(rows)]
 
+    def set_preference(self, key: str, value: Any):
+        serialized = value if isinstance(value, str) else json.dumps(value)
+        with self._get_connection() as conn:
+            conn.execute(
+                "INSERT INTO user_preferences (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, serialized),
+            )
+            conn.commit()
+
+    def get_preference(self, key: str, default: Any = None) -> Any:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT value FROM user_preferences WHERE key = ?", (key,)
+            ).fetchone()
+        if row is None:
+            return default
+        try:
+            return json.loads(row[0])
+        except (TypeError, json.JSONDecodeError):
+            return row[0]
+
     def log_execution(
         self, agent: str, tool: str, status: str, details: Optional[dict[str, Any]] = None
     ):
         with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
+            conn.execute(
                 "INSERT INTO execution_logs (agent, tool, status, details) VALUES (?, ?, ?, ?)",
                 (agent, tool, status, json.dumps(details or {})),
             )
