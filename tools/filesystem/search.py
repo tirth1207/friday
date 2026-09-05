@@ -1,20 +1,18 @@
-from pathlib import Path
+from core.runtime.permissions import get_workspace_root, validate_workspace_path
 
 
-async def search_files(
-    directory: str,
-    query: str,
-):
-
-    root = Path(directory)
+async def search_files(query: str, path: str = ".") -> list[str]:
+    """
+    Search the filesystem recursively for files matching query in name or content.
+    Returns relative paths.
+    """
+    root = validate_workspace_path(path)
+    workspace_root = get_workspace_root()
 
     if not root.exists():
-        raise FileNotFoundError(
-            f"Directory does not exist: {directory}"
-        )
+        raise FileNotFoundError(f"Directory does not exist: {path}")
 
     results = []
-
     query_lower = query.lower()
 
     ignored = {
@@ -25,23 +23,36 @@ async def search_files(
         ".next",
         "dist",
         "build",
+        ".pytest_cache",
     }
 
-    for path in root.rglob("*"):
-
-        if any(
-            part in ignored
-            for part in path.parts
-        ):
+    for item in root.rglob("*"):
+        if any(part in ignored for part in item.parts):
             continue
 
-        if not path.is_file():
+        if not item.is_file():
             continue
 
-        if query_lower in path.name.lower():
+        # Match filename
+        matches_name = query_lower in item.name.lower()
+        matches_content = False
 
-            results.append(
-                str(path)
-            )
+        if not matches_name and item.stat().st_size < 500_000:
+            try:
+                content = item.read_text(encoding="utf-8", errors="ignore")
+                if query_lower in content.lower():
+                    matches_content = True
+            except Exception:
+                pass
 
-    return results[:100]
+        if matches_name or matches_content:
+            try:
+                rel_path = str(item.relative_to(workspace_root))
+            except ValueError:
+                rel_path = str(item)
+            results.append(rel_path)
+
+        if len(results) >= 100:
+            break
+
+    return results

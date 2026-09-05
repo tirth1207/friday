@@ -1,0 +1,89 @@
+import json
+import sqlite3
+from pathlib import Path
+from typing import Any, Optional
+
+from core.runtime.permissions import get_workspace_root
+
+
+class MemoryStore:
+    def __init__(self, db_path: Optional[str] = None):
+        if not db_path:
+            db_dir = get_workspace_root() / ".friday"
+            db_dir.mkdir(exist_ok=True)
+            self.db_path = str(db_dir / "friday_memory.db")
+        else:
+            self.db_path = db_path
+
+        self._init_db()
+
+    def _get_connection(self) -> sqlite3.Connection:
+        return sqlite3.connect(self.db_path)
+
+    def _init_db(self):
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS conversation_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_preferences (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS execution_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    agent TEXT,
+                    tool TEXT,
+                    status TEXT,
+                    details TEXT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.commit()
+
+    def add_message(self, role: str, content: str):
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO conversation_history (role, content) VALUES (?, ?)",
+                (role, content),
+            )
+            conn.commit()
+
+    def get_recent_messages(self, limit: int = 20) -> list[dict[str, str]]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT role, content FROM conversation_history ORDER BY id DESC LIMIT ?",
+                (limit,),
+            )
+            rows = cursor.fetchall()
+            return [{"role": row[0], "content": row[1]} for row in reversed(rows)]
+
+    def log_execution(
+        self, agent: str, tool: str, status: str, details: Optional[dict[str, Any]] = None
+    ):
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO execution_logs (agent, tool, status, details) VALUES (?, ?, ?, ?)",
+                (agent, tool, status, json.dumps(details or {})),
+            )
+            conn.commit()
+
+
+memory_store = MemoryStore()

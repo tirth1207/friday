@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import asyncio
-from typing import Any
-
+from typing import Any, Optional
 from core.events import FridayEvent
 from services.event_bus.bus import event_bus
 
@@ -10,10 +8,6 @@ from services.event_bus.bus import event_bus
 class AgentRuntime:
     def __init__(self):
         self.agents: dict[str, dict[str, Any]] = {}
-
-    # ==========================================================
-    # EVENT EMITTER
-    # ==========================================================
 
     async def emit(
         self,
@@ -34,16 +28,8 @@ class AgentRuntime:
             status=status,
             metadata=metadata or {},
         )
-
-        print(
-            f"[EVENT BUS] {event_type}: {title}"
-        )
-
+        print(f"[EVENT BUS] {event_type}: {title}")
         await event_bus.publish(event)
-
-    # ==========================================================
-    # CREATE AGENT
-    # ==========================================================
 
     async def create_agent(
         self,
@@ -54,7 +40,6 @@ class AgentRuntime:
             "name": name,
             "description": description,
         }
-
         await self.emit(
             event_type="agent_created",
             title=f"{name} created",
@@ -62,10 +47,6 @@ class AgentRuntime:
             agent=name,
             status="pending",
         )
-
-    # ==========================================================
-    # START AGENT
-    # ==========================================================
 
     async def start_agent(
         self,
@@ -86,10 +67,6 @@ class AgentRuntime:
             status="running",
         )
 
-    # ==========================================================
-    # COMPLETE AGENT
-    # ==========================================================
-
     async def complete_agent(
         self,
         name: str,
@@ -104,10 +81,6 @@ class AgentRuntime:
             status="completed",
             metadata=metadata,
         )
-
-    # ==========================================================
-    # START TOOL
-    # ==========================================================
 
     async def start_tool(
         self,
@@ -129,10 +102,6 @@ class AgentRuntime:
             metadata=metadata,
         )
 
-    # ==========================================================
-    # COMPLETE TOOL
-    # ==========================================================
-
     async def complete_tool(
         self,
         agent: str,
@@ -153,10 +122,6 @@ class AgentRuntime:
             metadata=metadata,
         )
 
-    # ==========================================================
-    # TOOL ERROR
-    # ==========================================================
-
     async def tool_error(
         self,
         agent: str,
@@ -173,10 +138,6 @@ class AgentRuntime:
             status="failed",
             metadata=metadata,
         )
-
-    # ==========================================================
-    # VERIFICATION
-    # ==========================================================
 
     async def verify(
         self,
@@ -199,182 +160,5 @@ class AgentRuntime:
             metadata=metadata,
         )
 
-    # ==========================================================
-    # DEMO / CURRENT WORKFLOW
-    #
-    # This keeps compatibility with the current orchestrator.
-    # Later we will replace this with the real planner/tool
-    # execution graph.
-    # ==========================================================
-
-    async def run_demo_workflow(
-        self,
-        user_request: str,
-    ):
-        # ------------------------------------------------------
-        # UNDERSTANDING
-        # ------------------------------------------------------
-
-        await self.emit(
-            event_type="thinking",
-            title="Understanding request",
-            description=user_request,
-            status="running",
-        )
-
-        await asyncio.sleep(0.15)
-
-        await self.emit(
-            event_type="thinking",
-            title="Request understood",
-            description=(
-                "The request has been classified."
-            ),
-            status="completed",
-        )
-
-        # ------------------------------------------------------
-        # PLANNING
-        # ------------------------------------------------------
-
-        await self.emit(
-            event_type="planning",
-            title="Creating execution plan",
-            description=(
-                "Breaking the request into independent subtasks."
-            ),
-            status="running",
-        )
-
-        await asyncio.sleep(0.15)
-
-        await self.emit(
-            event_type="planning",
-            title="Execution plan created",
-            description="4 subtasks identified.",
-            status="completed",
-            metadata={
-                "subtasks": 4,
-            },
-        )
-
-        # ------------------------------------------------------
-        # CREATE AGENTS
-        # ------------------------------------------------------
-
-        await self.create_agent(
-            "Planner Agent",
-            "Create and coordinate the execution plan.",
-        )
-
-        await self.create_agent(
-            "Developer Agent",
-            "Inspect the project and identify implementation changes.",
-        )
-
-        await self.create_agent(
-            "Research Agent",
-            "Analyze architecture and identify relevant patterns.",
-        )
-
-        await self.create_agent(
-            "QA Agent",
-            "Verify the proposed implementation.",
-        )
-
-        # ------------------------------------------------------
-        # PLANNER
-        # ------------------------------------------------------
-
-        await self.start_agent(
-            "Planner Agent"
-        )
-
-        await asyncio.sleep(0.15)
-
-        await self.complete_agent(
-            "Planner Agent"
-        )
-
-        # ------------------------------------------------------
-        # DEVELOPER
-        # ------------------------------------------------------
-
-        await self.start_agent(
-            "Developer Agent"
-        )
-
-        # ------------------------------------------------------
-        # TOOL EXAMPLE
-        # ------------------------------------------------------
-
-        await self.start_tool(
-            agent="Developer Agent",
-            tool="filesystem.search",
-            description=(
-                "Searching the project for relevant files."
-            ),
-        )
-
-        await asyncio.sleep(0.15)
-
-        await self.complete_tool(
-            agent="Developer Agent",
-            tool="filesystem.search",
-            description=(
-                "Filesystem search completed."
-            ),
-            metadata={
-                "simulated": True,
-            },
-        )
-
-        # ------------------------------------------------------
-        # RESEARCH
-        # ------------------------------------------------------
-
-        await self.start_agent(
-            "Research Agent"
-        )
-
-        await asyncio.sleep(0.15)
-
-        await self.complete_agent(
-            "Research Agent"
-        )
-
-        # ------------------------------------------------------
-        # QA
-        # ------------------------------------------------------
-
-        await self.start_agent(
-            "QA Agent"
-        )
-
-        await asyncio.sleep(0.15)
-
-        await self.complete_agent(
-            "QA Agent"
-        )
-
-        # ------------------------------------------------------
-        # DEVELOPER COMPLETE
-        # ------------------------------------------------------
-
-        await self.complete_agent(
-            "Developer Agent"
-        )
-
-        # ------------------------------------------------------
-        # VERIFICATION
-        # ------------------------------------------------------
-
-        await self.verify(
-            title="Execution verified",
-            description=(
-                "The execution workflow completed successfully."
-            ),
-            success=True,
-        )
 
 agent_runtime = AgentRuntime()
