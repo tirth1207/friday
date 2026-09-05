@@ -34,21 +34,29 @@ async def call_nvidia(prompt: str) -> str:
         raise RuntimeError(f"AI provider unavailable: {error}")
 
 
-# These phrases indicate that FRIDAY needs to inspect or change the local
-# machine/project. Everything else should stay on the normal conversational
-# path unless the planner explicitly selects a registered tool.
-TOOL_INTENT_TERMS = (
-    "file", "files", "folder", "directory", "dir", "filesystem", "path",
-    "project", "codebase", "repo", "repository", "github", "git",
-    "commit", "branch", "diff", "terminal", "command", "shell", "run",
-    "execute", "create", "write", "edit", "modify", "update", "delete",
-    "remove", "rename", "move", "read", "list", "search", "find",
-    "inspect", "debug", "test", "tests", "build", "install", "package",
-    "dependency", "dependencies", "npm", "pip", "python", "powershell",
+# Strong signals that the user is asking FRIDAY to operate on the local
+# workspace, repository, Git state, or terminal. These are intentionally
+# narrower than generic words such as "read", "search", or "create".
+LOCAL_TARGET_TERMS = (
+    "file", "files", "folder", "directory", "filesystem", "workspace", "path",
+    "project", "codebase", "repo", "repository", "github", "git", "commit",
+    "branch", "diff", "terminal", "command", "shell", "package.json",
+    "pyproject.toml", "requirements.txt", "package-lock.json", "tsconfig",
+    "next.config", "vite.config", "dockerfile", "docker-compose",
 )
 
-# Requests that are naturally external/current-data tasks. Only use these if
-# an appropriate registered tool actually exists; never invent a tool.
+# Explicit local/system actions. A verb alone is not enough for mutation/read
+# operations; it must be paired with a local target. This prevents requests
+# such as "create a poem" or "read this paragraph" from opening the tool loop.
+LOCAL_ACTION_TERMS = (
+    "inspect", "debug", "test", "tests", "build", "install", "run", "execute",
+    "create", "write", "edit", "modify", "update", "delete", "remove", "rename",
+    "move", "read", "list", "search", "find", "check", "show", "open",
+)
+
+# Requests that may need external/current data. They only enter orchestration
+# when a matching registered capability exists, so FRIDAY never hallucinates
+# a web/weather/news tool that the runtime does not actually provide.
 CURRENT_DATA_TERMS = (
     "latest", "today", "current", "now", "right now", "live", "weather",
     "forecast", "news", "price", "stock", "exchange rate", "score",
@@ -60,23 +68,44 @@ def _contains_term(clean: str, terms: tuple[str, ...]) -> bool:
     return any(re.search(rf"\b{re.escape(term)}\b", clean) for term in terms)
 
 
+def _has_local_path(clean: str) -> bool:
+    """Detect obvious file/path syntax without requiring a specific filename."""
+    path_patterns = (
+        r"(?:^|\s)[./\\][^\s]+",
+        r"\b[a-zA-Z]:[\\/][^\s]+",
+        r"\b[\w.-]+\.(?:py|js|jsx|ts|tsx|json|md|txt|css|html|yaml|yml|toml|env)\b",
+    )
+    return any(re.search(pattern, clean) for pattern in path_patterns)
+
+
 def is_tool_required(message: str) -> bool:
-    """Cheap deterministic gate: ordinary questions never enter tool orchestration."""
+    """Deterministic first gate: use tools only when the request needs them."""
     clean = " ".join(message.strip().lower().split())
     if not clean:
         return False
 
-    # Explicit action language always means the user is asking FRIDAY to do
-    # something rather than merely explain something.
-    if _contains_term(clean, TOOL_INTENT_TERMS):
+    has_local_target = _contains_term(clean, LOCAL_TARGET_TERMS) or _has_local_path(clean)
+    has_local_action = _contains_term(clean, LOCAL_ACTION_TERMS)
+
+    # High-confidence local/system requests, e.g.:
+    # "inspect my project", "read package.json", "run tests", "git status".
+    if has_local_target and has_local_action:
         return True
 
-    # Current-data requests only need tools when the registry contains a tool
-    # capable of satisfying them. Otherwise answer normally from the model.
+    # A few nouns are themselves unambiguous commands in this assistant.
+    # "git status", "git diff", and "git log" should work without another verb.
+    if re.search(r"\bgit\s+(?:status|diff|log|branch)\b", clean):
+        return True
+
+    # Terminal/command execution is also explicit enough to route directly.
+    if re.search(r"\b(?:run|execute)\s+(?:this\s+)?(?:command|shell|terminal)\b", clean):
+        return True
+
+    # Current-data requests only use orchestration if a matching tool exists.
     if _contains_term(clean, CURRENT_DATA_TERMS):
-        tool_names = {tool["name"] for tool in tool_registry.list_tools()}
+        tool_names = {tool["name"].lower() for tool in tool_registry.list_tools()}
         return any(
-            any(keyword in name.lower() for keyword in ("weather", "news", "search", "web", "http"))
+            any(keyword in name for keyword in ("weather", "news", "search", "web", "http"))
             for name in tool_names
         )
 
@@ -133,17 +162,14 @@ Available registered tools:
 Decide whether ONE more tool call is genuinely required.
 
 Rules:
-1. Use a tool only when the user explicitly needs an external action, local
-   filesystem/project information, Git information, terminal execution, or
-   another capability that cannot be answered from the conversation/model.
-2. Do NOT call tools for greetings, casual conversation, explanations,
-   definitions, general knowledge, opinions, brainstorming, or ordinary
-   questions such as "who is Narendra Modi?".
-3. If the request is already satisfied, output exactly DONE.
-4. If the needed information is already in execution history, output DONE.
-5. Never repeat a successful tool call with identical arguments.
-6. Never invent a tool. Choose only from the registered tools below.
-7. Return EXACTLY ONE JSON object when a tool is needed:
+1. Use a tool only when the user needs an external action, local filesystem/project information, Git information, terminal execution, or another capability that cannot be answered from the conversation/model.
+2. Do NOT call tools for greetings, casual conversation, explanations, definitions, general knowledge, opinions, brainstorming, or ordinary questions such as "who is Narendra Modi?".
+3. Do NOT interpret generic words like "read", "search", "create", "write", or "run" as tool intent unless the request clearly targets the local project/system or an available external capability.
+4. If the request is already satisfied, output exactly DONE.
+5. If the needed information is already in execution history, output DONE.
+6. Never repeat a successful tool call with identical arguments.
+7. Never invent a tool. Choose only from the registered tools below.
+8. Return EXACTLY ONE JSON object when a tool is needed:
 {{
   "tool": "<registered tool name>",
   "arguments": {{ }},
