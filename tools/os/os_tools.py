@@ -77,10 +77,10 @@ async def os_current_directory() -> dict[str, str]:
     return {"working_directory": os.getcwd()}
 
 
-os_system_info_tool = tool(os_system_info, name="os_system_info")
-os_list_processes_tool = tool(os_list_processes, name="os_list_processes")
-os_disk_usage_tool = tool(os_disk_usage, name="os_disk_usage")
-os_current_directory_tool = tool(os_current_directory, name="os_current_directory")
+os_system_info_tool = tool("os_system_info")(os_system_info)
+os_list_processes_tool = tool("os_list_processes")(os_list_processes)
+os_disk_usage_tool = tool("os_disk_usage")(os_disk_usage)
+os_current_directory_tool = tool("os_current_directory")(os_current_directory)
 
 OS_LANGCHAIN_TOOLS = [
     os_system_info_tool,

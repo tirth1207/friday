@@ -4,7 +4,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel
 
-import tools  # noqa: F401 - registers tools
+import tools
 from core.agents.runtime import agent_runtime
 from core.agents.specialized import (
     DeveloperAgent,

@@ -152,10 +152,10 @@ async def github_list_commits(repository: str, limit: int = 10) -> list[dict[str
 
 # LangChain tool objects provide schemas for specialized agents, while the raw
 # async functions remain compatible with FRIDAY's existing tool registry.
-github_get_profile_tool = tool(github_get_profile, name="github_get_profile")
-github_list_repositories_tool = tool(github_list_repositories, name="github_list_repositories")
-github_get_repository_tool = tool(github_get_repository, name="github_get_repository")
-github_list_commits_tool = tool(github_list_commits, name="github_list_commits")
+github_get_profile_tool = tool("github_get_profile")(github_get_profile)
+github_list_repositories_tool = tool("github_list_repositories")(github_list_repositories)
+github_get_repository_tool = tool("github_get_repository")(github_get_repository)
+github_list_commits_tool = tool("github_list_commits")(github_list_commits)
 
 GITHUB_LANGCHAIN_TOOLS = [
     github_get_profile_tool,
