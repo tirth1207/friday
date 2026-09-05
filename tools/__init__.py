@@ -9,8 +9,32 @@ from tools.filesystem.create import create_file
 from tools.filesystem.exists import file_exists
 from tools.terminal.execute import execute_command
 from tools.git.git_tools import git_status, git_diff, git_log, git_branch
-from tools.github.github_tools import github_get_profile, github_list_repositories, github_get_repository, github_list_commits
-from tools.os.os_tools import os_system_info, os_list_processes, os_disk_usage, os_list_drives, os_read_file, os_write_file, os_list_directory, os_create_directory, os_path_exists, os_delete_path
+from tools.github.github_tools import (
+    github_get_profile,
+    github_list_repositories,
+    github_get_repository,
+    github_list_commits,
+    github_get_contents,
+    github_read_file,
+    github_list_directory,
+    github_get_file_metadata,
+    github_get_tree,
+    github_search_code,
+    github_list_branches,
+    github_get_commit,
+)
+from tools.os.os_tools import (
+    os_system_info,
+    os_list_processes,
+    os_disk_usage,
+    os_list_drives,
+    os_read_file,
+    os_write_file,
+    os_list_directory,
+    os_create_directory,
+    os_path_exists,
+    os_delete_path,
+)
 
 
 def register_all_tools():
@@ -29,16 +53,23 @@ def register_all_tools():
     tool_registry.register(name="git.branch", func=git_branch, description="Get Git branches.", permission=PermissionLevel.SAFE)
 
     tool_registry.register(name="github.profile", func=github_get_profile, description="Fetch GitHub profile using configured credentials.", permission=PermissionLevel.SAFE, parameters={"username": "string"})
-    tool_registry.register(name="github.repositories", func=github_list_repositories, description="List repositories for the configured GitHub user.", permission=PermissionLevel.SAFE, parameters={"username": "string", "limit": "number", "sort": "string"})
-    tool_registry.register(name="github.repository", func=github_get_repository, description="Fetch one GitHub repository's metadata.", permission=PermissionLevel.SAFE, parameters={"repository": "string"})
-    tool_registry.register(name="github.commits", func=github_list_commits, description="Fetch recent commits for a GitHub repository.", permission=PermissionLevel.SAFE, parameters={"repository": "string", "limit": "number"})
+    tool_registry.register(name="github.repositories", func=github_list_repositories, description="List repositories accessible to the authenticated GitHub account, including permitted private repositories.", permission=PermissionLevel.SAFE, parameters={"username": "string", "limit": "number", "sort": "string", "page": "number"})
+    tool_registry.register(name="github.repository", func=github_get_repository, description="Fetch one GitHub repository's metadata from owner/name or URL.", permission=PermissionLevel.SAFE, parameters={"repository": "string"})
+    tool_registry.register(name="github.commits", func=github_list_commits, description="Fetch recent commits for a GitHub repository.", permission=PermissionLevel.SAFE, parameters={"repository": "string", "limit": "number", "page": "number"})
+    tool_registry.register(name="github.contents", func=github_get_contents, description="Fetch a repository file or directory listing at an optional branch, tag, or commit.", permission=PermissionLevel.SAFE, parameters={"repository": "string", "path": "string", "ref": "string"})
+    tool_registry.register(name="github.file.read", func=github_read_file, description="Read one UTF-8 text file from any accessible GitHub repository.", permission=PermissionLevel.SAFE, parameters={"repository": "string", "path": "string", "ref": "string"})
+    tool_registry.register(name="github.directory.list", func=github_list_directory, description="List the contents of any accessible directory in a GitHub repository.", permission=PermissionLevel.SAFE, parameters={"repository": "string", "path": "string", "ref": "string"})
+    tool_registry.register(name="github.file.metadata", func=github_get_file_metadata, description="Get metadata for a repository file without returning its content.", permission=PermissionLevel.SAFE, parameters={"repository": "string", "path": "string", "ref": "string"})
+    tool_registry.register(name="github.tree", func=github_get_tree, description="Fetch the Git tree for a repository, recursively when requested.", permission=PermissionLevel.SAFE, parameters={"repository": "string", "ref": "string", "recursive": "boolean"})
+    tool_registry.register(name="github.code.search", func=github_search_code, description="Search code in accessible GitHub repositories, optionally scoped to one repository.", permission=PermissionLevel.SAFE, parameters={"query": "string", "repository": "string", "limit": "number"})
+    tool_registry.register(name="github.branches", func=github_list_branches, description="List branches for an accessible GitHub repository.", permission=PermissionLevel.SAFE, parameters={"repository": "string", "limit": "number", "page": "number"})
+    tool_registry.register(name="github.commit", func=github_get_commit, description="Fetch one commit with metadata, stats, and changed-file patches.", permission=PermissionLevel.SAFE, parameters={"repository": "string", "sha": "string"})
 
     tool_registry.register(name="os.system_info", func=os_system_info, description="Inspect operating-system and host information.", permission=PermissionLevel.SAFE)
     tool_registry.register(name="os.processes", func=os_list_processes, description="List running processes without command-line arguments.", permission=PermissionLevel.SAFE, parameters={"limit": "number"})
     tool_registry.register(name="os.disk_usage", func=os_disk_usage, description="Inspect disk capacity and usage for a local path.", permission=PermissionLevel.SAFE, parameters={"path": "string"})
     tool_registry.register(name="os.drives", func=os_list_drives, description="List all mounted drives and partitions accessible to FRIDAY.", permission=PermissionLevel.SAFE)
 
-    # Cross-drive OS filesystem. Absolute paths are supported on every accessible drive.
     tool_registry.register(name="os.file.read", func=os_read_file, description="Read a text file from any accessible local drive or absolute path.", permission=PermissionLevel.SAFE, parameters={"path": "string"})
     tool_registry.register(name="os.file.write", func=os_write_file, description="Write a UTF-8 text file to any accessible local drive or absolute path.", permission=PermissionLevel.PERMISSION_REQUIRED, parameters={"path": "string", "content": "string", "overwrite": "boolean"})
     tool_registry.register(name="os.folder.list", func=os_list_directory, description="List files and folders from any accessible local drive or absolute path.", permission=PermissionLevel.SAFE, parameters={"path": "string", "include_hidden": "boolean"})
