@@ -39,6 +39,14 @@ def _explicit_repository_from_message(message: str) -> str | None:
     return match.group(1).removesuffix(".git") if match else None
 
 
+def _is_explicit_build_request(message: str) -> bool:
+    """Detect direct engineering commands without hijacking normal coding questions."""
+    text = (message or "").strip().lower()
+    action = re.search(r"\b(build|implement|finish|complete|fix|repair|refactor|write|create|add|remove|replace|update|ship)\b", text)
+    target = re.search(r"\b(code|feature|project|repo|repository|bug|issue|file|component|frontend|backend|api|app|application|function|test|implementation)\b", text)
+    return bool(action and target)
+
+
 @app.on_event("startup")
 async def startup() -> None:
     if await refresh_connection_if_needed():
@@ -47,7 +55,7 @@ async def startup() -> None:
 
 @app.get("/")
 async def root():
-    return {"name": "FRIDAY", "status": "online", "version": "0.2.0"}
+    return {"name": "FRIDAY", "status": "online", "version": "0.3.0"}
 
 
 @app.get("/health")
@@ -57,13 +65,11 @@ async def health():
 
 @app.get("/conversations")
 async def conversations(limit: int = 80):
-    """Return recent persisted chat messages for the collapsible history sidebar."""
     return {"conversations": memory_store.get_conversations(limit)}
 
 
 @app.get("/memory/experiences")
 async def experiences(query: str = "", limit: int = 20):
-    """Return learned experiences for future cognition/debugging surfaces."""
     return {"experiences": memory_store.search_experiences(query, limit)}
 
 
@@ -160,6 +166,22 @@ async def chat(request: ChatRequest):
             from tools.github.repository_agent import _resolve_repository
             repository = await _resolve_repository(repository)
             set_active_repository(repository)
+
+        if _is_explicit_build_request(request.message):
+            from core.agents.developer_loop import DeveloperLoop
+            await memory_store.add_message("user", request.message) if False else None
+            result = await DeveloperLoop(max_iterations=4, allow_mutations=True).run(request.message, repository)
+            response = (
+                "## Developer Agent\n\n"
+                f"{result.get('summary', 'Engineering loop completed.')}\n\n"
+                f"- Iterations: `{result.get('iterations', 0)}`\n"
+                f"- Verified: `{result.get('verified', False)}`\n"
+                f"- Changes enabled: `{result.get('mutations_enabled', True)}`"
+            )
+            memory_store.add_message("user", request.message)
+            memory_store.add_message("assistant", response)
+            return {"response": response, "repository": repository, "developer_run": result}
+
         response = await ask_friday(request.message, repository=repository)
         return {"response": response, "repository": repository}
     except Exception as error:
