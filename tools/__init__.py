@@ -1,6 +1,7 @@
 from core.runtime.permissions import PermissionLevel
 from core.runtime.registry import tool_registry
 
+from core.agents.factory import create_agent_definition, list_agent_definitions
 from tools.filesystem.list import list_directory
 from tools.filesystem.search import search_files
 from tools.filesystem.read import read_file
@@ -69,11 +70,13 @@ def register_all_tools():
     tool_registry.register(name="github.commit", func=github_get_commit, description="Fetch one commit with metadata, stats, and changed-file patches.", permission=PermissionLevel.SAFE, parameters={"repository": "string", "sha": "string"})
     tool_registry.register(name="github.api", func=github_api, description="Universal GitHub REST API tool. Use for any GitHub operation that does not have a dedicated github.* tool. Supports GET, POST, PUT, PATCH and DELETE; mutations are permission-gated by the runtime.", permission=PermissionLevel.PERMISSION_REQUIRED, parameters={"method": "string", "path": "string", "params": "object", "body": "object"})
 
+    tool_registry.register(name="agent.create", func=create_agent_definition, description="Create a safe dynamic specialist-agent definition from existing registered tools when FRIDAY is missing a reusable domain role.", permission=PermissionLevel.SAFE, parameters={"name": "string", "role": "string", "description": "string", "tools": "array", "system_prompt": "string"})
+    tool_registry.register(name="agent.list", func=list_agent_definitions, description="List dynamically created specialist-agent definitions.", permission=PermissionLevel.SAFE)
+
     tool_registry.register(name="os.system_info", func=os_system_info, description="Inspect operating-system and host information.", permission=PermissionLevel.SAFE)
     tool_registry.register(name="os.processes", func=os_list_processes, description="List running processes without command-line arguments.", permission=PermissionLevel.SAFE, parameters={"limit": "number"})
     tool_registry.register(name="os.disk_usage", func=os_disk_usage, description="Inspect disk capacity and usage for a local path.", permission=PermissionLevel.SAFE, parameters={"path": "string"})
     tool_registry.register(name="os.drives", func=os_list_drives, description="List all mounted drives and partitions accessible to FRIDAY.", permission=PermissionLevel.SAFE)
-
     tool_registry.register(name="os.file.read", func=os_read_file, description="Read a text file from any accessible local drive or absolute path.", permission=PermissionLevel.SAFE, parameters={"path": "string"})
     tool_registry.register(name="os.file.write", func=os_write_file, description="Write a UTF-8 text file to any accessible local drive or absolute path.", permission=PermissionLevel.PERMISSION_REQUIRED, parameters={"path": "string", "content": "string", "overwrite": "boolean"})
     tool_registry.register(name="os.folder.list", func=os_list_directory, description="List files and folders from any accessible local drive or absolute path.", permission=PermissionLevel.SAFE, parameters={"path": "string", "include_hidden": "boolean"})
