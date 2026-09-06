@@ -24,7 +24,11 @@ class ToolExecutor:
             )
             raise ValueError(error_msg)
 
-        if tool_meta.permission == PermissionLevel.BLOCKED:
+        required_permission = tool_meta.permission
+        if tool_name == "github.api" and str(arguments.get("method", "GET")).upper() == "GET":
+            required_permission = PermissionLevel.SAFE
+
+        if required_permission == PermissionLevel.BLOCKED:
             error_msg = f"Tool '{tool_name}' execution is blocked by policy."
             await agent_runtime.tool_error(
                 agent=agent,
@@ -42,7 +46,10 @@ class ToolExecutor:
         )
 
         try:
-            result = await tool_func(**arguments)
+            if hasattr(tool_func, "ainvoke"):
+                result = await tool_func.ainvoke(arguments)
+            else:
+                result = await tool_func(**arguments)
 
             safe_metadata: dict[str, Any] = {}
             if isinstance(result, list):
