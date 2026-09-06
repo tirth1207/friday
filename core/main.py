@@ -65,12 +65,15 @@ async def health():
 
 @app.get("/conversations")
 async def conversations(limit: int = 80):
-    return {"conversations": memory_store.get_conversations(limit)}
+    # Keep history requests bounded even if an older frontend sends a larger value.
+    safe_limit = max(1, min(limit, 80))
+    return {"conversations": memory_store.get_conversations(safe_limit)}
 
 
 @app.get("/memory/experiences")
 async def experiences(query: str = "", limit: int = 20):
-    return {"experiences": memory_store.search_experiences(query, limit)}
+    safe_limit = max(1, min(limit, 100))
+    return {"experiences": memory_store.search_experiences(query, safe_limit)}
 
 
 @app.get("/auth/github")
