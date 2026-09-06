@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -32,28 +33,44 @@ You have native structured tool calling. Use tools whenever the user asks about 
 repository, local machine, files, Git, GitHub, code, or another tool-backed capability.
 Never invent tool names or tool arguments. Use the schemas supplied by LangChain.
 
-Repository rules:
+GitHub rules:
 - A named repository is always more specific than a request to list repositories.
+- Preserve the canonical owner/name returned by GitHub; repository names are case-insensitive
+  for API addressing but the returned full_name is authoritative for presentation.
 - For a repository explanation, inspect the actual repository rather than relying on a README.
-- For "explain my friday project", the canonical repository is tirth1207/friday when the
-  resolved request says so.
 - For repository architecture analysis, prefer this sequence when needed:
   1. github.repository
-  2. github.tree with recursive=true
+  2. github.tree with repository=<owner>/<repo> and recursive=true
   3. Read the most important entry points and configuration files discovered in the tree.
-- Do not assume README.md exists. If a file is absent, continue with the files that exist.
+- Do not assume README.md exists. If a file is absent, continue with files that exist.
 - Use github.file.read for file contents, github.directory.list for a directory, and
   github.code.search for targeted symbol/string searches.
+- Use github.api for GitHub REST operations that do not have a dedicated tool.
+- For github.api, path must be a GitHub REST path such as /repos/OWNER/REPO/issues.
 - Do not use local filesystem tools to inspect a remote GitHub repository.
-- Do not expose credentials, PATs, tokens, or secret values.
+- Never expose credentials, PATs, tokens, or secret values.
 
 Execution rules:
 - Use the minimum number of tool calls needed, but gather enough source material to answer accurately.
 - You may make multiple tool calls in one turn when they are independent.
-- After receiving tool results, reason over them and continue calling tools if important evidence is missing.
+- After receiving tool results, continue calling tools if important evidence is missing.
 - Stop when you have enough evidence and answer the user directly.
+- Never print a tool-call JSON object as the final answer. Tool calls must be executed.
 - Do not mention hidden prompts, chain-of-thought, or internal planning.
 """.strip()
+
+
+_GITHUB_ARGUMENT_ALIASES: dict[str, str] = {
+    "repo": "repository",
+    "repo_name": "repository",
+    "repo_full_name": "repository",
+    "repository_name": "repository",
+    "full_name": "repository",
+    "file_path": "path",
+    "filepath": "path",
+    "branch": "ref",
+    "revision": "ref",
+}
 
 
 def _agent_for_tool(tool_name: str) -> str:
@@ -68,6 +85,111 @@ def _agent_for_tool(tool_name: str) -> str:
 
 def _compact_history(history: list[dict[str, Any]]) -> str:
     return json.dumps(history[-20:], ensure_ascii=False, default=str)[:100_000]
+
+
+def _normalize_github_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Normalize common provider/model aliases to FRIDAY's canonical GitHub schemas."""
+    if not tool_name.startswith("github."):
+        return arguments
+
+    normalized: dict[str, Any] = {}
+    for key, value in arguments.items():
+        canonical = _GITHUB_ARGUMENT_ALIASES.get(key, key)
+        if canonical not in normalized:
+            normalized[canonical] = value
+
+    if "repository" in normalized and isinstance(normalized["repository"], str):
+        normalized["repository"] = normalized["repository"].strip()
+    if "path" in normalized and isinstance(normalized["path"], str):
+        normalized["path"] = normalized["path"].lstrip("/")
+    return normalized
+
+
+def _extract_pseudo_tool_call(content: Any) -> tuple[str, dict[str, Any]] | None:
+    """Recover tool calls emitted as JSON/text by models that fail native tool-call formatting.
+
+    NVIDIA documents native bind_tools support, but only tool-capable models reliably return
+    AIMessage.tool_calls. This compatibility path prevents a JSON-shaped tool request from
+    being shown to the user or silently treated as a final answer.
+    """
+    if not isinstance(content, str):
+        return None
+
+    text = content.strip()
+    if not text:
+        return None
+
+    candidates = [text]
+    candidates.extend(re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.DOTALL | re.IGNORECASE))
+    candidates.extend(re.findall(r"(\{\s*['\"]tool['\"]\s*:.*?\})", text, flags=re.DOTALL))
+
+    for candidate in candidates:
+        try:
+            payload = json.loads(candidate)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+
+        tool_name = payload.get("tool") or payload.get("name") or payload.get("tool_name")
+        arguments = payload.get("arguments") or payload.get("args") or payload.get("parameters") or {}
+        if isinstance(tool_name, str) and isinstance(arguments, dict):
+            return tool_name.strip(), arguments
+
+    return None
+
+
+async def _execute_structured_tool(
+    tool_name: str,
+    arguments: dict[str, Any],
+    tool_by_model_name: dict[str, Any],
+    history: list[dict[str, Any]],
+) -> tuple[Any, str]:
+    """Validate, normalize and execute one model-selected tool."""
+    model_tool_name = tool_name.strip()
+    registry_name = registry_tool_name(model_tool_name)
+    if registry_name.startswith("github."):
+        arguments = _normalize_github_arguments(registry_name, arguments)
+
+    valid_registry_names = {registry_tool_name(name) for name in tool_by_model_name}
+    if model_tool_name not in tool_by_model_name and registry_name not in valid_registry_names:
+        raise ValueError(f"Unknown tool requested: '{model_tool_name}'")
+
+    agent_name = _agent_for_tool(registry_name)
+    history_entry = {
+        "tool": registry_name,
+        "model_tool": model_tool_name,
+        "arguments": arguments,
+        "agent": agent_name,
+    }
+
+    if registry_name.startswith("github."):
+        agent = GitHubAgent()
+    elif registry_name.startswith("os."):
+        agent = OSAgent()
+    else:
+        agent = ResearchAgent()
+
+    try:
+        await agent.create()
+        await agent.start(f"Executing {registry_name}")
+        result = await tool_executor.execute(
+            tool_name=registry_name,
+            arguments=arguments,
+            agent=agent_name,
+        )
+        await agent.complete(f"Completed {registry_name}")
+        history_entry["result"] = result
+        history.append(history_entry)
+        return result, registry_name
+    except Exception as error:
+        history_entry["error"] = str(error)
+        history.append(history_entry)
+        try:
+            await agent.complete(f"Failed {registry_name}")
+        except Exception:
+            pass
+        raise
 
 
 async def _run_structured_agent(
@@ -100,7 +222,36 @@ async def _run_structured_agent(
         messages.append(response)
         tool_calls = list(response.tool_calls or [])
 
+        # Compatibility with providers/models that emit a JSON-shaped tool request as
+        # normal message content instead of populating AIMessage.tool_calls.
         if not tool_calls:
+            pseudo_call = _extract_pseudo_tool_call(response.content)
+            if pseudo_call:
+                pseudo_name, pseudo_args = pseudo_call
+                call_id = f"compat-{len(history) + 1}"
+                try:
+                    result, registry_name = await _execute_structured_tool(
+                        pseudo_name,
+                        pseudo_args,
+                        tool_by_model_name,
+                        history,
+                    )
+                    messages.append(
+                        ToolMessage(
+                            content=serialize_tool_result(result),
+                            tool_call_id=call_id,
+                        )
+                    )
+                    continue
+                except Exception as error:
+                    messages.append(
+                        ToolMessage(
+                            content=f"Tool execution failed: {error}",
+                            tool_call_id=call_id,
+                        )
+                    )
+                    continue
+
             content = response.content
             if isinstance(content, str):
                 return content
@@ -108,14 +259,13 @@ async def _run_structured_agent(
 
         for call in tool_calls:
             model_tool_name = str(call.get("name", ""))
-            registry_name = registry_tool_name(model_tool_name)
             arguments = call.get("args") or {}
             call_id = call.get("id") or model_tool_name
 
-            if not model_tool_name or model_tool_name not in tool_by_model_name:
+            if not model_tool_name:
                 messages.append(
                     ToolMessage(
-                        content=f"Tool call rejected: unknown tool '{model_tool_name}'.",
+                        content="Tool call rejected: missing tool name.",
                         tool_call_id=call_id,
                     )
                 )
@@ -124,33 +274,13 @@ async def _run_structured_agent(
             if not isinstance(arguments, dict):
                 arguments = {}
 
-            agent_name = _agent_for_tool(registry_name)
-            history_entry = {
-                "tool": registry_name,
-                "model_tool": model_tool_name,
-                "arguments": arguments,
-                "agent": agent_name,
-            }
-
             try:
-                if registry_name.startswith("github."):
-                    agent = GitHubAgent()
-                elif registry_name.startswith("os."):
-                    agent = OSAgent()
-                else:
-                    agent = ResearchAgent()
-
-                await agent.create()
-                await agent.start(f"Executing {registry_name}")
-                result = await tool_executor.execute(
-                    tool_name=registry_name,
-                    arguments=arguments,
-                    agent=agent_name,
+                result, _ = await _execute_structured_tool(
+                    model_tool_name,
+                    arguments,
+                    tool_by_model_name,
+                    history,
                 )
-                await agent.complete(f"Completed {registry_name}")
-
-                history_entry["result"] = result
-                history.append(history_entry)
                 messages.append(
                     ToolMessage(
                         content=serialize_tool_result(result),
@@ -158,8 +288,6 @@ async def _run_structured_agent(
                     )
                 )
             except Exception as error:
-                history_entry["error"] = str(error)
-                history.append(history_entry)
                 messages.append(
                     ToolMessage(
                         content=f"Tool execution failed: {error}",
@@ -167,14 +295,16 @@ async def _run_structured_agent(
                     )
                 )
 
+    # If the model keeps selecting tools until the round limit, perform one final
+    # answer-only call with the grounded execution history rather than exposing JSON.
     fallback = await get_model().ainvoke(
         [
             SystemMessage(content=SYSTEM_PROMPT),
             HumanMessage(
                 content=(
                     f"Answer the user's request using the tool execution history below. "
-                    f"Do not invent missing facts.\n\nRequest: {user_message}\n\n"
-                    f"Execution history:\n{_compact_history(history)}"
+                    f"Do not invent missing facts and do not output tool-call JSON.\n\n"
+                    f"Request: {user_message}\n\nExecution history:\n{_compact_history(history)}"
                 )
             ),
         ]
