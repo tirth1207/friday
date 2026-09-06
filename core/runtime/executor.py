@@ -1,4 +1,5 @@
 from typing import Any
+
 from core.agents.runtime import agent_runtime
 from core.runtime.permissions import PermissionLevel
 from core.runtime.registry import tool_registry
@@ -10,6 +11,7 @@ class ToolExecutor:
         tool_name: str,
         arguments: dict[str, Any],
         agent: str = "Developer Agent",
+        confirmed: bool = False,
     ) -> Any:
         tool_func = tool_registry.get_tool(tool_name)
         tool_meta = tool_registry.get_metadata(tool_name)
@@ -25,6 +27,7 @@ class ToolExecutor:
             raise ValueError(error_msg)
 
         required_permission = tool_meta.permission
+        # GitHub reads are safe. Every mutation remains confirmation-gated.
         if tool_name == "github.api" and str(arguments.get("method", "GET")).upper() == "GET":
             required_permission = PermissionLevel.SAFE
 
@@ -35,6 +38,19 @@ class ToolExecutor:
                 tool=tool_name,
                 description=error_msg,
                 metadata={"error": error_msg},
+            )
+            raise PermissionError(error_msg)
+
+        if required_permission == PermissionLevel.PERMISSION_REQUIRED and not confirmed:
+            error_msg = (
+                f"Tool '{tool_name}' requires explicit confirmation before execution. "
+                "Pass confirmed=True after the user approves the operation."
+            )
+            await agent_runtime.tool_error(
+                agent=agent,
+                tool=tool_name,
+                description=error_msg,
+                metadata={"error": error_msg, "requires_confirmation": True},
             )
             raise PermissionError(error_msg)
 
