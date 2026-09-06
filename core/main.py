@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
+from core.github_diagnostics import list_github_diagnostics, run_github_diagnostic
 from core.github_oauth import (
     apply_connection_to_github_tools,
     authorization_url,
@@ -66,7 +67,8 @@ async def github_auth_callback(code: str | None = None, state: str | None = None
         apply_connection_to_github_tools()
         login = str(connection.get("login") or "GitHub")
         return RedirectResponse(f"{github_oauth_settings.frontend_url.rstrip('/')}/github?connected=1&login={login}")
-    except Exception:
+    except Exception as error:
+        print(f"[FRIDAY GitHub OAuth] Callback failed: {error}")
         return RedirectResponse(f"{github_oauth_settings.frontend_url.rstrip('/')}/github?error=oauth_failed")
 
 
@@ -82,6 +84,26 @@ async def github_auth_disconnect():
     github_settings.pat = ""
     github_settings.username = ""
     return {"connected": False}
+
+
+@app.get("/auth/github/diagnostics")
+async def github_diagnostics():
+    """List direct GitHub API diagnostics. This endpoint does not invoke the AI."""
+    try:
+        await refresh_connection_if_needed()
+        return {"tests": await list_github_diagnostics()}
+    except Exception as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+@app.get("/auth/github/diagnostics/{test_id}")
+async def github_diagnostic(test_id: str, repository: str | None = None):
+    """Run one direct GitHub GET request, bypassing FRIDAY's AI/agent layer."""
+    try:
+        await refresh_connection_if_needed()
+        return await run_github_diagnostic(test_id, repository)
+    except Exception as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @app.post("/chat")
