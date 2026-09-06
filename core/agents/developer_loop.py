@@ -13,7 +13,7 @@ from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from core.agents.runtime import agent_runtime
 from core.memory import memory_store
 from core.runtime.executor import tool_executor
-from core.runtime.langchain_tools import get_langchain_tools, serialize_tool_result
+from core.runtime.langchain_tools import get_langchain_tools, registry_tool_name, serialize_tool_result
 from providers.nvidia.client import get_model
 
 LOOP_PROMPT = """You are FRIDAY's Developer Agent.
@@ -25,6 +25,9 @@ If verification fails, diagnose and repair within the bounded iteration limit.
 Never expose private reasoning. Return only the final engineering summary.
 All mutating operations must go through FRIDAY's permission-gated executor.
 Do not call developer.run from inside this loop; use the concrete workspace, git, filesystem and terminal tools.
+When the model returns a provider-safe tool name containing `__`, it refers to FRIDAY's dotted registry name (for example `github__analyze` -> `github.analyze`).
+
+Verification is evidence-based: only mark work verified after a concrete verification tool reports success. A model statement alone is not verification.
 """
 
 
@@ -34,9 +37,30 @@ class DeveloperLoop:
         self.allow_mutations = allow_mutations
 
     async def _tool(self, name: str, args: dict[str, Any], history: list[dict[str, Any]]) -> Any:
-        result = await tool_executor.execute(name, args, agent="Developer Agent", confirmed=self.allow_mutations)
-        history.append({"tool": name, "arguments": args, "result": result})
+        registry_name = registry_tool_name(name)
+        result = await tool_executor.execute(
+            registry_name,
+            args,
+            agent="Developer Agent",
+            confirmed=self.allow_mutations,
+        )
+        history.append({"tool": registry_name, "model_tool": name, "arguments": args, "result": result})
         return result
+
+    @staticmethod
+    def _verification_evidence(history: list[dict[str, Any]]) -> bool:
+        verification_tools = {"terminal.execute"}
+        for entry in reversed(history):
+            if entry.get("tool") not in verification_tools or "error" in entry:
+                continue
+            result = entry.get("result")
+            if isinstance(result, dict):
+                text = json.dumps(result, ensure_ascii=False, default=str).lower()
+            else:
+                text = str(result).lower()
+            if any(marker in text for marker in ("exit code: 0", '"returncode": 0', '"return_code": 0', "tests passed", "all tests passed", "passed")):
+                return True
+        return False
 
     async def _drive(self, model, messages: list[Any], history: list[dict[str, Any]], rounds: int = 4) -> str:
         final_text = ""
@@ -48,20 +72,21 @@ class DeveloperLoop:
                 final_text = str(getattr(response, "content", ""))
                 break
             for call in calls:
-                name = str(call.get("name", ""))
+                model_name = str(call.get("name", ""))
                 args = call.get("args") or {}
                 if not isinstance(args, dict):
                     args = {}
-                if name in {"developer__run", "developer.run"}:
-                    history.append({"tool": name, "error": "Recursive developer.run call blocked."})
-                    messages.append(ToolMessage(content="Recursive developer.run is unavailable inside the developer loop. Use concrete tools instead.", tool_call_id=call.get("id") or name))
+                registry_name = registry_tool_name(model_name)
+                if registry_name == "developer.run":
+                    history.append({"tool": registry_name, "model_tool": model_name, "error": "Recursive developer.run call blocked."})
+                    messages.append(ToolMessage(content="Recursive developer.run is unavailable inside the developer loop. Use concrete tools instead.", tool_call_id=call.get("id") or model_name))
                     continue
                 try:
-                    result = await self._tool(name, args, history)
-                    messages.append(ToolMessage(content=serialize_tool_result(result), tool_call_id=call.get("id") or name))
+                    result = await self._tool(model_name, args, history)
+                    messages.append(ToolMessage(content=serialize_tool_result(result), tool_call_id=call.get("id") or model_name))
                 except Exception as error:
-                    history.append({"tool": name, "arguments": args, "error": str(error)})
-                    messages.append(ToolMessage(content=f"Tool failed: {error}", tool_call_id=call.get("id") or name))
+                    history.append({"tool": registry_name, "model_tool": model_name, "arguments": args, "error": str(error)})
+                    messages.append(ToolMessage(content=f"Tool failed: {error}", tool_call_id=call.get("id") or model_name))
         return final_text
 
     async def run(self, goal: str, repository: str | None = None) -> dict[str, Any]:
@@ -102,11 +127,11 @@ class DeveloperLoop:
             }, ensure_ascii=False)))
             final_text = await self._drive(model, messages, history, rounds=4)
             state["last_model_summary"] = final_text[:3000]
-            if any(word in final_text.lower() for word in ("verified", "tests pass", "successfully completed", "goal is complete")):
+            if self._verification_evidence(history):
                 state["verified"] = True
-                await agent_runtime.emit("verification", f"Iteration {iteration} verified", "The developer agent reports the goal is satisfied.", agent=agent, status="completed")
+                await agent_runtime.emit("verification", f"Iteration {iteration} verified", "A concrete verification command completed successfully.", agent=agent, status="completed")
                 break
-            await agent_runtime.emit("verification", f"Iteration {iteration} completed", "The goal is not yet verified; continuing within the bounded loop.", agent=agent, status="completed")
+            await agent_runtime.emit("verification", f"Iteration {iteration} completed", "No concrete verification success was observed; continuing within the bounded loop.", agent=agent, status="completed")
 
         summary = {
             "goal": goal,
