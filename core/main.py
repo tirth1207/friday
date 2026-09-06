@@ -42,8 +42,18 @@ class RepositoryContextRequest(BaseModel):
 
 
 def _explicit_repository_from_message(message: str) -> str | None:
-    """Extract an explicit owner/repository target from the current message."""
-    match = re.search(r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b", message or "")
+    """Extract an explicit owner/repository target, including UI-prefixed text."""
+    text = message or ""
+
+    # Accept both normal text and UI/composer forms such as:
+    #   Repository tirth1207/AGI_Maze
+    #   Repository:tirth1207/AGI_Maze
+    #   Repositorytirth1207/AGI_Maze
+    match = re.search(
+        r"(?:\brepository\b\s*[:\-]?\s*)?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b",
+        text,
+        re.IGNORECASE,
+    )
     if not match:
         return None
     return match.group(1).removesuffix(".git")
