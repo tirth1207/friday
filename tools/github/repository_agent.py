@@ -117,15 +117,21 @@ def _repo_parts(value: str) -> tuple[str | None, str]:
 async def _resolve_repository(value: str) -> str:
     owner, name = _repo_parts(value)
     if owner:
-        data = await _request(f"/repos/{owner}/{name}")
-        return str(data.get("full_name") or f"{owner}/{name}")
+        try:
+            data = await _request(f"/repos/{owner}/{name}")
+            return str(data.get("full_name") or f"{owner}/{name}")
+        except RuntimeError as error:
+            # A one-part name is a convenience form for the user's own repo, but it
+            # must still be able to resolve a public repository with the same name.
+            if owner != settings.username.strip() or "404" not in str(error):
+                raise
 
     data = await _request("/search/repositories", {"q": f"{name} in:name", "per_page": 10})
     items = data.get("items") or []
     exact = next((item for item in items if str(item.get("name", "")).lower() == name.lower()), None)
     chosen = exact or (items[0] if items else None)
     if not chosen:
-        raise RuntimeError(f"Could not resolve public GitHub repository: {name}")
+        raise RuntimeError(f"Could not resolve GitHub repository: {name}")
     return str(chosen.get("full_name"))
 
 
@@ -134,7 +140,6 @@ def _score_path(path: str) -> int:
     name = clean.rsplit("/", 1)[-1]
     if any(clean.startswith(prefix) for prefix in SKIP_PREFIXES):
         return -10000
-
     score = 0
     if clean in IMPORTANT_EXACT:
         score += 1000
@@ -144,7 +149,6 @@ def _score_path(path: str) -> int:
         score += 850
     if any(clean.startswith(prefix) for prefix in IMPORTANT_DIRS):
         score += 120
-
     for keyword, points in {
         "architecture": 180, "api": 150, "server": 140, "backend": 140,
         "frontend": 130, "database": 130, "schema": 130, "auth": 120,
@@ -154,7 +158,6 @@ def _score_path(path: str) -> int:
     }.items():
         if keyword in clean:
             score += points
-
     if ".github/" in clean:
         score += 60
     if clean.endswith(tuple(TEXT_EXTENSIONS)):
@@ -242,14 +245,12 @@ async def github_analyze_repository(repository: str, ref: str | None = None, max
     target_ref = ref or str(metadata.get("default_branch") or "main")
     tree, partial = await _tree(canonical, target_ref)
     selected_paths = _select_files(tree, max_files)
-
     files: list[dict[str, Any]] = []
     for path in selected_paths:
         try:
             files.append(await _read_file(canonical, path, target_ref))
         except Exception as error:
             files.append({"path": path, "error": str(error)})
-
     commits = await _recent_commits(canonical, commit_limit) if commit_limit else []
     return {
         "repository": metadata, "ref": target_ref, "tree": tree, "tree_count": len(tree),
