@@ -3,15 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import os
-import re
 from pathlib import Path
 from typing import Any
 
 from core.config import settings
-from core.runtime.permissions import get_workspace_root
+from core.github_oauth import refresh_connection_if_needed, load_connection
 
-_REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_REPOSITORY = __import__("re").compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
 async def prepare_repository_workspace(repository: str, ref: str | None = None) -> dict[str, Any]:
@@ -19,6 +17,7 @@ async def prepare_repository_workspace(repository: str, ref: str | None = None) 
     if not _REPOSITORY.fullmatch(repository.strip()):
         raise ValueError("Repository must use owner/name format.")
 
+    await refresh_connection_if_needed()
     repo = repository.strip()
     workspace_root = Path(settings.friday_workspace).resolve()
     workspace_dir = workspace_root / ".friday" / "workspaces"
@@ -41,19 +40,13 @@ async def prepare_repository_workspace(repository: str, ref: str | None = None) 
         command.extend(["--branch", ref])
     command.extend([clone_url, str(target)])
 
-    env = os.environ.copy()
-    # Keep credentials out of argv and command/event logs. Git reads this header from its environment config.
-    try:
-        from tools.github.repository_agent import settings as github_settings
-        token = str(github_settings.pat or "").strip()
-    except Exception:
-        token = ""
+    env = __import__("os").environ.copy()
+    # Git reads the OAuth token through an ephemeral askpass helper; the token is never placed in argv.
+    token = str((load_connection() or {}).get("access_token") or "").strip()
     if token:
-        env.update({
-            "GIT_CONFIG_COUNT": "1",
-            "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
-            "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: bearer {token}",
-        })
+        env["GIT_ASKPASS"] = str(Path(__file__).resolve().parents[2] / "core" / "runtime" / "github_askpass.py")
+        env["FRIDAY_GITHUB_TOKEN"] = token
+        env["GIT_TERMINAL_PROMPT"] = "0"
 
     process = await asyncio.create_subprocess_exec(
         *command,
