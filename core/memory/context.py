@@ -61,6 +61,21 @@ def _is_repo_structure_request(text: str) -> bool:
     return has_repo_context and has_structure_intent and has_list_like_intent and has_specific_repo
 
 
+def _is_repo_explanation_request(text: str, active_platform: str = "") -> bool:
+    """Identify repository/project explanation requests, including GitHub follow-ups."""
+    clean = _clean(text)
+    has_explain_intent = re.search(
+        r"\b(?:explain|explanation|describe|analyze|analyse|understand|overview)\b",
+        clean,
+    ) is not None
+    has_project_context = re.search(r"\b(?:project|repo|repository|codebase)\b", clean) is not None
+    has_github_context = (
+        active_platform == "github"
+        or re.search(r"\bgithub\b", clean) is not None
+    )
+    return has_explain_intent and has_project_context and has_github_context
+
+
 def _is_friday_project_explain_request(text: str) -> bool:
     """Identify natural-language requests to explain the user's FRIDAY repository."""
     clean = _clean(text)
@@ -113,6 +128,17 @@ def resolve_request(message: str) -> dict[str, Any]:
             "github.tree with repository=tirth1207/friday and recursive=true, and README "
             "when available before generating the explanation. Do not return planner JSON "
             "to the user. Execute the selected tools and answer from their results."
+        )
+        platform = "github"
+    elif _is_repo_explanation_request(resolved, platform):
+        resolved = (
+            f"{resolved}\n\nMANDATORY EXECUTION REQUIREMENT: this is a GitHub repository/project "
+            "explanation request. Identify the requested repository from the user's message "
+            "and conversation context. Use registered GitHub tools, starting with "
+            "github.repository when the repository can be identified, then github.tree with "
+            "repository=<owner>/<repo> and recursive=true. Read important source/config files "
+            "discovered in the tree before explaining the architecture. Do not return tool-call "
+            "JSON to the user and do not substitute local filesystem data for remote GitHub data."
         )
         platform = "github"
 
