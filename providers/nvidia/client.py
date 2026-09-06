@@ -1,42 +1,31 @@
-from functools import lru_cache
-
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
 from .config import settings
 
 
-DEFAULT_TOOL_MODEL = "nvidia/nemotron-3-super-120b-a12b"
+DEFAULT_HOSTED_MODEL = "nvidia/nemotron-3-super-120b-a12b"
 
 
-@lru_cache(maxsize=1)
-def _hosted_tool_model() -> str:
-    """Resolve a provider-known tool-capable hosted model once per process.
-
-    Custom/local NIM deployments are left untouched because their model catalog is
-    deployment-specific. For NVIDIA hosted endpoints, prefer a model LangChain
-    explicitly reports as supporting tools when the configured model is unknown or
-    not tool-capable.
-    """
-    configured = settings.model.strip()
-    if not settings.base_url.startswith("https://integrate.api.nvidia.com"):
-        return configured
-
-    try:
-        models = ChatNVIDIA.get_available_models()
-        for model in models:
-            if getattr(model, "id", None) == configured and getattr(model, "supports_tools", False):
-                return configured
-        for model in models:
-            if getattr(model, "supports_tools", False):
-                return str(model.id)
-    except Exception as error:
-        print(f"[NVIDIA] Could not resolve hosted tool-capable model: {error}")
-
-    return DEFAULT_TOOL_MODEL
+def _is_hosted() -> bool:
+    return settings.base_url.rstrip("/").startswith("https://integrate.api.nvidia.com")
 
 
 def get_model(require_tools: bool = False):
-    model_name = _hosted_tool_model() if require_tools else settings.model
+    """Create the NVIDIA model used by FRIDAY.
+
+    Hosted NVIDIA inference is pinned to the documented Nemotron 3 Super model instead
+    of probing the model catalog on every process startup. This prevents an old model
+    name in .env from breaking tool calling and removes the extra catalog request.
+    """
+    if _is_hosted() and not settings.api_key.strip():
+        raise RuntimeError(
+            "NVIDIA_API_KEY is missing or empty. Set NVIDIA_API_KEY in FRIDAY's .env before starting the server."
+        )
+
+    model_name = DEFAULT_HOSTED_MODEL if _is_hosted() else settings.model.strip()
+    if not model_name:
+        raise RuntimeError("NVIDIA_MODEL is empty for the configured custom NIM endpoint.")
+
     return ChatNVIDIA(
         model=model_name,
         api_key=settings.api_key,
