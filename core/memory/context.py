@@ -61,6 +61,18 @@ def _is_repo_structure_request(text: str) -> bool:
     return has_repo_context and has_structure_intent and has_list_like_intent and has_specific_repo
 
 
+def _is_friday_project_explain_request(text: str) -> bool:
+    """Identify natural-language requests to explain the user's FRIDAY repository."""
+    clean = _clean(text)
+    has_friday = re.search(r"\bfriday\b", clean) is not None
+    has_project_context = re.search(r"\b(?:project|repo|repository|codebase)\b", clean) is not None
+    has_explain_intent = re.search(
+        r"\b(?:explain|explanation|describe|analyze|analyse|understand|overview)\b",
+        clean,
+    ) is not None
+    return has_friday and has_project_context and has_explain_intent
+
+
 def _is_env_key_request(text: str) -> bool:
     clean = _clean(text)
     has_env = re.search(r"\b(?:env|environment|environmental)\b", clean) is not None
@@ -92,6 +104,17 @@ def resolve_request(message: str) -> dict[str, Any]:
             resolved = f"Continue the previous task: {active_task}. The user's follow-up is: {message.strip()}"
         elif previous_user:
             resolved = f"Continue the previous request: {previous_user}. The user's follow-up is: {message.strip()}"
+
+    if _is_friday_project_explain_request(resolved):
+        resolved = (
+            f"{resolved}\n\nResolved repository target: tirth1207/friday. "
+            "MANDATORY EXECUTION REQUIREMENT: explain the actual GitHub repository "
+            "tirth1207/friday using registered GitHub tools. Fetch github.repository, "
+            "github.tree with repository=tirth1207/friday and recursive=true, and README "
+            "when available before generating the explanation. Do not return planner JSON "
+            "to the user. Execute the selected tools and answer from their results."
+        )
+        platform = "github"
 
     if platform == "github" and (_is_env_key_request(resolved) or _is_repo_file_read_request(resolved)):
         base_context = active_task or previous_user
