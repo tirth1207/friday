@@ -62,8 +62,6 @@ _GITHUB_ARGUMENT_ALIASES = {
     "filepath": "path", "branch": "ref", "revision": "ref",
 }
 
-# Nemotron 3 Super supports a large context window. Keep enough room for repository
-# evidence and execution history without silently truncating the useful tail.
 _MAX_CONTEXT_CHARS = 800_000
 
 
@@ -128,14 +126,19 @@ def _extract_repository_target(message: str, resolved_request: str, selected_rep
     """Resolve repository context without allowing stale UI context to win."""
     combined = f"{message}\n{resolved_request}"
 
-    # 1. Explicit owner/repository in the current request always wins.
-    owner_repo = re.search(r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b", message or "")
+    # Accept normal and UI-generated forms, including:
+    # "Repository tirth1207/AGI_Maze", "Repository:tirth1207/AGI_Maze",
+    # and "Repositorytirth1207/AGI_Maze".
+    owner_repo = re.search(
+        r"(?:\brepository\b\s*[:\-]?\s*)?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b",
+        message or "",
+        re.IGNORECASE,
+    )
     if owner_repo:
         return owner_repo.group(1).removesuffix(".git")
 
-    # 2. Explicit project/repository name in the current request.
     explicit_name = re.search(
-        r"\b(?:explain|describe|analyze|analyse|understand|overview)\s+([A-Za-z0-9_.-]+)\s+(?:repo(?:sitory)?|project|codebase)\b",
+        r"\b(?:explain|describe|analyze|analyse|understand|overview)\s+(?!this\b|that\b)([A-Za-z0-9_.-]+)\s+(?:repo(?:sitory)?|project|codebase)\b",
         message,
         re.IGNORECASE,
     )
@@ -144,7 +147,7 @@ def _extract_repository_target(message: str, resolved_request: str, selected_rep
         return "tirth1207/friday" if name.lower() == "friday" else name
 
     my_repo = re.search(
-        r"\b(?:my|the)\s+([A-Za-z0-9_.-]+)\s+(?:repo(?:sitory)?|project|codebase)\b",
+        r"\b(?:my|the)\s+(?!this\b|that\b)([A-Za-z0-9_.-]+)\s+(?:repo(?:sitory)?|project|codebase)\b",
         message,
         re.IGNORECASE,
     )
@@ -155,7 +158,6 @@ def _extract_repository_target(message: str, resolved_request: str, selected_rep
     if re.search(r"\bfriday\b", combined, re.IGNORECASE) and re.search(r"\b(?:repo|repository|project|codebase)\b", combined, re.IGNORECASE):
         return "tirth1207/friday"
 
-    # 3/4. Request-scoped UI repository, then persisted default.
     if selected_repository and selected_repository.strip():
         return selected_repository.strip()
     return None
@@ -166,9 +168,6 @@ def _clean_model_answer(content: Any) -> str:
     text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False, default=str)
     text = re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"^\s*(?:analysis|reasoning|chain[- ]of[- ]thought)\s*:\s*", "", text, flags=re.IGNORECASE)
-
-    # If an older/provider-side model still emits an internal drafting preamble,
-    # keep the actual answer beginning at its first Markdown heading.
     lowered = text[:1200].lower()
     internal_markers = (
         "we need to produce",
@@ -181,7 +180,6 @@ def _clean_model_answer(content: Any) -> str:
         heading = re.search(r"(?m)^#{1,6}\s+\S+", text)
         if heading:
             text = text[heading.start():]
-
     return text.strip()
 
 
@@ -276,7 +274,6 @@ async def _run_structured_agent(user_message: str, resolved_request: str, recent
                     messages.append(ToolMessage(content=f"Tool execution failed: {error}", tool_call_id=f"compat-{len(history)+1}"))
                     continue
             return _clean_model_answer(response.content)
-
         for call in tool_calls:
             model_tool_name = str(call.get("name", ""))
             arguments = call.get("args") or {}
@@ -290,7 +287,6 @@ async def _run_structured_agent(user_message: str, resolved_request: str, recent
                 messages.append(ToolMessage(content=serialize_tool_result(result), tool_call_id=call.get("id") or model_tool_name))
             except Exception as error:
                 messages.append(ToolMessage(content=f"Tool execution failed: {error}", tool_call_id=call.get("id") or model_tool_name))
-
     fallback = await get_model(require_tools=False).ainvoke([
         SystemMessage(content=SYSTEM_PROMPT),
         HumanMessage(content=(
@@ -332,16 +328,14 @@ async def _run_github_repository_agent(user_message: str, resolved_request: str,
                 "reasoning or drafting process. Produce a complete but focused repository explanation from the "
                 "supplied evidence. Cover: purpose, main features, users/use cases, architecture, technologies, "
                 "important directories/files, request/data flow, integrations, auth/security, deployment, testing, "
-                "and notable risks/gaps. Use Markdown headings and bullets. Do not stop halfway. Target 1000-1600 "
-                "words. Never invent facts and never expose secrets. If evidence is missing, say it is not verified."
+                "and notable risks/gaps. Use Markdown headings and bullets. Do not stop halfway. Target 1000-1600 words. "
+                "If evidence is missing, explicitly say it was not verified. Never invent facts and never expose secrets."
             )),
-            HumanMessage(content=(
-                f"User request: {user_message}\nSelected repository: {target}\n\nGitHub evidence:\n{evidence}"
-            )),
+            HumanMessage(content=f"User request: {user_message}\nSelected repository: {target}\n\nGitHub evidence:\n{evidence}"),
         ])
-        content = _clean_model_answer(getattr(synthesis, "content", synthesis))
-        if content:
-            return content
+        content = getattr(synthesis, "content", synthesis)
+        if isinstance(content, str) and content.strip():
+            return _clean_model_answer(content)
     except Exception as error:
         print(f"[FRIDAY] GitHub evidence collected but NVIDIA synthesis failed: {error}")
     return _format_repository_dossier_fallback(dossier)
@@ -353,16 +347,11 @@ async def ask_friday(message: str, repository: str | None = None) -> str:
     recent_messages = context["recent_messages"]
     memory_store.add_message("user", message)
     if not is_tool_required(resolved_request):
-        response = _clean_model_answer(await answer_conversationally(message, recent_messages))
+        response = await answer_conversationally(message, recent_messages)
         memory_store.add_message("assistant", response)
         return response
 
-    await agent_runtime.emit(
-        event_type="thinking",
-        title="Understanding request",
-        description="FRIDAY is selecting and coordinating specialist agents. Details stay in the execution trace.",
-        status="running",
-    )
+    await agent_runtime.emit(event_type="thinking", title="Understanding request", description="FRIDAY is selecting and coordinating specialist agents. Internal reasoning remains private; only execution progress is shown in the trace.", status="running")
 
     if _is_environment_key_request(resolved_request):
         try:
@@ -399,6 +388,5 @@ async def ask_friday(message: str, repository: str | None = None) -> str:
     except Exception as error:
         print(f"[FRIDAY] Structured supervisor failed: {error}")
         response = f"I couldn't complete the request right now. The provider returned: {error}"
-    response = _clean_model_answer(response)
     memory_store.add_message("assistant", response)
     return response
