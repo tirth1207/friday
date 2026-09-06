@@ -35,6 +35,10 @@ class ChatRequest(BaseModel):
     repository: str | None = None
 
 
+class RepositoryContextRequest(BaseModel):
+    repository: str | None = None
+
+
 @app.on_event("startup")
 async def startup() -> None:
     if await refresh_connection_if_needed():
@@ -107,7 +111,9 @@ async def github_repository_context():
 
 
 @app.post("/auth/github/repository-context")
-async def github_repository_context_set(repository: str | None = None):
+async def github_repository_context_set(request: RepositoryContextRequest):
+    """Set the active repository from the JSON body sent by the web client."""
+    repository = request.repository
     if repository is None or not repository.strip():
         clear_active_repository()
         return {"repository": None}
