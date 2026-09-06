@@ -44,6 +44,23 @@ def _is_repo_file_read_request(text: str) -> bool:
     return has_repo_context and has_read_intent and has_file_target
 
 
+def _is_repo_structure_request(text: str) -> bool:
+    """Identify requests for the tree/structure of one specific repository."""
+    clean = _clean(text)
+    has_repo_context = re.search(r"\b(?:repo|repository|project|github)\b", clean) is not None
+    has_structure_intent = re.search(
+        r"\b(?:structure|project structure|directory tree|tree|folder structure|file structure|contents)\b",
+        clean,
+    ) is not None
+    has_list_like_intent = re.search(r"\b(?:list|show|get|fetch|display|see|view)\b", clean) is not None
+    has_specific_repo = (
+        re.search(r"\b(?:repo|repository)\s+(?:named|called)\s+[A-Za-z0-9_.-]+\b", clean) is not None
+        or re.search(r"\b(?:my|the)\s+[A-Za-z0-9_.-]+\s+(?:repo|repository|project)\b", clean) is not None
+        or re.search(r"\b[a-z0-9_.-]+/[a-z0-9_.-]+\b", clean) is not None
+    )
+    return has_repo_context and has_structure_intent and has_list_like_intent and has_specific_repo
+
+
 def _is_env_key_request(text: str) -> bool:
     clean = _clean(text)
     has_env = re.search(r"\b(?:env|environment|environmental)\b", clean) is not None
@@ -97,6 +114,19 @@ def resolve_request(message: str) -> dict[str, Any]:
                 "the registered tool github.file.read for the requested repository/path. "
                 "Do not substitute a directory listing or file metadata when content was requested."
             )
+        platform = "github"
+
+    # Repository structure is a repository-specific GitHub operation, not an
+    # account-level repository listing. Make that distinction deterministic so
+    # the orchestrator cannot route "my friday repo structure" to github.repositories.
+    if _is_repo_structure_request(resolved):
+        resolved = (
+            f"{resolved}\n\nMANDATORY EXECUTION REQUIREMENT: this is a specific-repository "
+            "project-structure request. Resolve the named repository and use the registered "
+            "tool github.tree with recursive=true to retrieve its directory/file tree. "
+            "DO NOT call github.repositories and DO NOT list the user's other repositories. "
+            "Return the structure of the requested repository only."
+        )
         platform = "github"
 
     # Make critical GitHub data requirements explicit to the planner. This is
