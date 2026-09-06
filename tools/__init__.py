@@ -2,6 +2,7 @@ from core.runtime.permissions import PermissionLevel
 from core.runtime.registry import tool_registry
 
 from core.agents.factory import create_agent_definition, list_agent_definitions
+from tools.self_improvement import self_inspect, self_read_file
 from tools.filesystem.list import list_directory
 from tools.filesystem.search import search_files
 from tools.filesystem.read import read_file
@@ -47,9 +48,7 @@ def register_all_tools():
     tool_registry.register(name="filesystem.write", func=write_file, description="Write a file in the configured workspace.", permission=PermissionLevel.PERMISSION_REQUIRED, parameters={"path": "string", "content": "string"})
     tool_registry.register(name="filesystem.create", func=create_file, description="Create a file in the configured workspace.", permission=PermissionLevel.PERMISSION_REQUIRED, parameters={"path": "string", "content": "string", "overwrite": "boolean"})
     tool_registry.register(name="filesystem.exists", func=file_exists, description="Check a workspace path.", permission=PermissionLevel.SAFE)
-
     tool_registry.register(name="terminal.execute", func=execute_command, description="Execute a terminal command in the workspace.", permission=PermissionLevel.PERMISSION_REQUIRED, parameters={"command": "string", "timeout": "number"})
-
     tool_registry.register(name="git.status", func=git_status, description="Get Git working tree status.", permission=PermissionLevel.SAFE)
     tool_registry.register(name="git.diff", func=git_diff, description="Get Git working tree diff.", permission=PermissionLevel.SAFE)
     tool_registry.register(name="git.log", func=git_log, description="Get Git commit history.", permission=PermissionLevel.SAFE, parameters={"max_count": "number"})
@@ -72,6 +71,9 @@ def register_all_tools():
 
     tool_registry.register(name="agent.create", func=create_agent_definition, description="Create a safe dynamic specialist-agent definition from existing registered tools when FRIDAY is missing a reusable domain role.", permission=PermissionLevel.SAFE, parameters={"name": "string", "role": "string", "description": "string", "tools": "array", "system_prompt": "string"})
     tool_registry.register(name="agent.list", func=list_agent_definitions, description="List dynamically created specialist-agent definitions.", permission=PermissionLevel.SAFE)
+
+    tool_registry.register(name="self.inspect", func=self_inspect, description="Inspect FRIDAY's own source/test/configuration tree without reading secrets or modifying files. Use this before self-diagnosis or self-improvement.", permission=PermissionLevel.SAFE)
+    tool_registry.register(name="self.file.read", func=self_read_file, description="Read a non-sensitive FRIDAY source/configuration file for self-diagnosis.", permission=PermissionLevel.SAFE, parameters={"path": "string"})
 
     tool_registry.register(name="os.system_info", func=os_system_info, description="Inspect operating-system and host information.", permission=PermissionLevel.SAFE)
     tool_registry.register(name="os.processes", func=os_list_processes, description="List running processes without command-line arguments.", permission=PermissionLevel.SAFE, parameters={"limit": "number"})
