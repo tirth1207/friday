@@ -25,6 +25,7 @@ type DiagnosticResult = Diagnostic & {
   message: string
   note?: string
   reason?: string
+  accepted_permissions?: string | null
 }
 
 const fallbackDiagnostics: Diagnostic[] = [
@@ -259,6 +260,7 @@ export default function GitHubConnectionPage() {
                               </div>
                               <p className="mt-1 break-words text-xs leading-5 text-white/55">{result.message}</p>
                               {result.path && <code className="mt-2 block break-all text-[10px] leading-4 text-white/25">{result.method} {result.path}</code>}
+                              {result.accepted_permissions && <p className="mt-2 text-[10px] leading-4 text-amber-300/60">GitHub says this endpoint accepts: {result.accepted_permissions}</p>}
                               {result.note && <p className="mt-2 text-[10px] leading-4 text-white/25">{result.note}</p>}
                             </div>
                           )}
