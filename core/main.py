@@ -2,7 +2,7 @@ from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from core.orchestrator import ask_friday
+from core.orchestrator_structured import ask_friday
 from services.api.websocket import friday_websocket
 
 
@@ -58,11 +58,6 @@ async def root():
         "status": "online",
         "version": "0.1.0",
     }
-
-
-# ============================================================
-# HEALTH
-# ============================================================
 
 
 @app.get("/health")
