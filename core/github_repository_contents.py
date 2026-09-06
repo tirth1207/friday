@@ -173,11 +173,16 @@ async def analyze_repository(
         except Exception as error:
             commit_error = str(error)
 
+    repository_map = _build_repository_map(tree)
     notes = [
         "Repository identity was resolved from GitHub.",
         "Repository structure was collected through the Contents API.",
         "The low-level Git Trees endpoint is intentionally avoided for repository analysis.",
         "Files were prioritized by documentation, configuration, architecture, and application entry-point relevance.",
+        "The explanation must be rendered as Markdown with this section order: " + " -> ".join(EXPLANATION_CONTRACT["required_sections"]),
+        "Markdown quality rules: use clear headings, bullets, backticks for code paths/symbols, and an ASCII architecture diagram when justified by evidence.",
+        "Evidence rule: distinguish verified facts from inference and say 'Not verified from the inspected files' when evidence is insufficient.",
+        "Repository map: " + str(repository_map),
     ]
     if partial:
         notes.append("The repository tree is bounded and may be partial; do not describe uninspected paths as exhaustive.")
@@ -190,7 +195,7 @@ async def analyze_repository(
         "tree": tree,
         "tree_count": len(tree),
         "tree_is_partial": partial,
-        "repository_map": _build_repository_map(tree),
+        "repository_map": repository_map,
         "selected_files": selected_paths,
         "files": files,
         "recent_commits": commits,
