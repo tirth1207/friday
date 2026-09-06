@@ -24,6 +24,7 @@ After implementation, run appropriate project tests/build/lint commands when ava
 If verification fails, diagnose and repair within the bounded iteration limit.
 Never expose private reasoning. Return only the final engineering summary.
 All mutating operations must go through FRIDAY's permission-gated executor.
+Do not call developer.run from inside this loop; use the concrete workspace, git, filesystem and terminal tools.
 """
 
 
@@ -51,6 +52,10 @@ class DeveloperLoop:
                 args = call.get("args") or {}
                 if not isinstance(args, dict):
                     args = {}
+                if name in {"developer__run", "developer.run"}:
+                    history.append({"tool": name, "error": "Recursive developer.run call blocked."})
+                    messages.append(ToolMessage(content="Recursive developer.run is unavailable inside the developer loop. Use concrete tools instead.", tool_call_id=call.get("id") or name))
+                    continue
                 try:
                     result = await self._tool(name, args, history)
                     messages.append(ToolMessage(content=serialize_tool_result(result), tool_call_id=call.get("id") or name))
@@ -70,7 +75,7 @@ class DeveloperLoop:
         await self._tool("filesystem.list", {"path": "."}, history)
         await self._tool("git.status", {}, history)
 
-        tools = get_langchain_tools()
+        tools = [tool for tool in get_langchain_tools() if tool.name not in {"developer__run", "developer.run"}]
         model = get_model(require_tools=True).bind_tools(tools)
         messages: list[Any] = [
             SystemMessage(content=LOOP_PROMPT),
@@ -93,7 +98,7 @@ class DeveloperLoop:
                 "phase": "implement_and_verify",
                 "iteration": iteration,
                 "mutations_enabled": self.allow_mutations,
-                "instruction": "Implement the next required change using tools. Run appropriate verification. If verification fails, repair it. If mutations are disabled, report the exact proposed changes instead of attempting writes.",
+                "instruction": "Implement the next required change using concrete tools. Run appropriate verification. If verification fails, repair it. If mutations are disabled, report the exact proposed changes instead of attempting writes.",
             }, ensure_ascii=False)))
             final_text = await self._drive(model, messages, history, rounds=4)
             state["last_model_summary"] = final_text[:3000]
