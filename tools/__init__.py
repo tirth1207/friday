@@ -2,6 +2,7 @@ from core.runtime.permissions import PermissionLevel
 from core.runtime.registry import tool_registry
 
 from core.agents.factory import create_agent_definition, list_agent_definitions
+from core.agents.developer_loop import DeveloperLoop
 from tools.self_improvement import self_inspect, self_read_file
 from tools.cognition.cognition_tools import learn_experience, recall_experiences, curiosity_probe, task_checkpoint
 from tools.filesystem.list import list_directory
@@ -25,6 +26,11 @@ from tools.os.os_tools import (
 )
 
 
+async def developer_run(goal: str, repository: str | None = None, max_iterations: int = 4):
+    """Run a bounded inspect/implement/verify/repair engineering loop for an explicit build task."""
+    return await DeveloperLoop(max_iterations=max_iterations, allow_mutations=True).run(goal, repository)
+
+
 def register_all_tools():
     tool_registry.register(name="filesystem.list", func=list_directory, description="List files and directories in the configured workspace.", permission=PermissionLevel.SAFE, parameters={"path": "string"})
     tool_registry.register(name="filesystem.search", func=search_files, description="Search files in the configured workspace.", permission=PermissionLevel.SAFE, parameters={"query": "string", "path": "string"})
@@ -37,6 +43,7 @@ def register_all_tools():
     tool_registry.register(name="git.diff", func=git_diff, description="Get Git working tree diff.", permission=PermissionLevel.SAFE)
     tool_registry.register(name="git.log", func=git_log, description="Get Git commit history.", permission=PermissionLevel.SAFE, parameters={"max_count": "number"})
     tool_registry.register(name="git.branch", func=git_branch, description="Get Git branches.", permission=PermissionLevel.SAFE)
+    tool_registry.register(name="developer.run", func=developer_run, description="Run a bounded engineering loop: inspect, implement, verify, repair, and learn for an explicit build/fix/finish request.", permission=PermissionLevel.PERMISSION_REQUIRED, parameters={"goal": "string", "repository": "string", "max_iterations": "number"})
 
     tool_registry.register(name="github.profile", func=github_get_profile, description="Fetch GitHub profile using configured credentials.", permission=PermissionLevel.SAFE, parameters={"username": "string"})
     tool_registry.register(name="github.repositories", func=github_list_repositories, description="List repositories accessible to the authenticated GitHub account.", permission=PermissionLevel.SAFE, parameters={"username": "string", "limit": "number", "sort": "string", "page": "number"})
@@ -57,10 +64,9 @@ def register_all_tools():
     tool_registry.register(name="agent.list", func=list_agent_definitions, description="List dynamic specialist-agent definitions.", permission=PermissionLevel.SAFE)
     tool_registry.register(name="self.inspect", func=self_inspect, description="Inspect FRIDAY source and tests without modifying files.", permission=PermissionLevel.SAFE)
     tool_registry.register(name="self.file.read", func=self_read_file, description="Read a non-sensitive FRIDAY source/config file.", permission=PermissionLevel.SAFE, parameters={"path": "string"})
-
     tool_registry.register(name="cognition.learn", func=learn_experience, description="Store a reusable lesson, decision, failure, pattern, or preference learned from completed work.", permission=PermissionLevel.SAFE, parameters={"kind": "string", "title": "string", "lesson": "string", "context": "string"})
-    tool_registry.register(name="cognition.recall", func=recall_experiences, description="Recall relevant experiences from FRIDAY's durable memory before repeating a task.", permission=PermissionLevel.SAFE, parameters={"query": "string", "limit": "number"})
-    tool_registry.register(name="cognition.curiosity", func=curiosity_probe, description="Generate bounded uncertainty-reduction questions for the current goal; investigate only questions that can materially improve the task.", permission=PermissionLevel.SAFE, parameters={"goal": "string", "known": "string", "limit": "number"})
+    tool_registry.register(name="cognition.recall", func=recall_experiences, description="Recall relevant experiences from durable memory before repeating a task.", permission=PermissionLevel.SAFE, parameters={"query": "string", "limit": "number"})
+    tool_registry.register(name="cognition.curiosity", func=curiosity_probe, description="Generate bounded uncertainty-reduction questions for the current goal.", permission=PermissionLevel.SAFE, parameters={"goal": "string", "known": "string", "limit": "number"})
     tool_registry.register(name="cognition.checkpoint", func=task_checkpoint, description="Persist a checkpoint for long-running project work.", permission=PermissionLevel.SAFE, parameters={"goal": "string", "completed": "array", "remaining": "array"})
 
     tool_registry.register(name="os.system_info", func=os_system_info, description="Inspect operating-system state.", permission=PermissionLevel.SAFE)
@@ -71,7 +77,7 @@ def register_all_tools():
     tool_registry.register(name="os.file.write", func=os_write_file, description="Write a local file after explicit approval.", permission=PermissionLevel.PERMISSION_REQUIRED, parameters={"path": "string", "content": "string", "overwrite": "boolean"})
     tool_registry.register(name="os.folder.list", func=os_list_directory, description="List a local directory.", permission=PermissionLevel.SAFE, parameters={"path": "string", "include_hidden": "boolean"})
     tool_registry.register(name="os.folder.create", func=os_create_directory, description="Create a local folder after explicit approval.", permission=PermissionLevel.PERMISSION_REQUIRED, parameters={"path": "string"})
-    tool_registry.register(name="os.path.exists", func=os_path_exists, description="Check a local path.", permission=PermissionLevel.SAFE, parameters={"path": "string"})
+    tool_registry.register(name="os.path.exists", func=os_path_exists, description="Check a local path.", permission=PermissionLevel.SAFE)
     tool_registry.register(name="os.path.delete", func=os_delete_path, description="Delete a local path after explicit approval.", permission=PermissionLevel.PERMISSION_REQUIRED, parameters={"path": "string", "recursive": "boolean"})
 
 
