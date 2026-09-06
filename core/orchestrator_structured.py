@@ -187,8 +187,10 @@ async def _execute_structured_tool(tool_name: str, arguments: dict[str, Any], to
         agent = OSAgent()
     elif registry_name.startswith(("filesystem.", "git.")):
         agent = ResearchAgent()
+    elif registry_name.startswith("self."):
+        agent = SelfImprovementAgent()
     else:
-        agent = SelfImprovementAgent() if registry_name.startswith("self.") else ResearchAgent()
+        agent = ResearchAgent()
     try:
         await agent.create()
         await agent.start(f"Executing {registry_name}")
