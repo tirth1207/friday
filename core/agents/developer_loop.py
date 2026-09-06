@@ -1,14 +1,14 @@
 """Goal-driven developer loop for FRIDAY.
 
-The loop turns a software goal into inspect -> plan -> implement -> verify -> repair -> learn.
-It deliberately uses the existing permission-gated tool executor instead of bypassing runtime policy.
+Turns a software goal into inspect -> plan -> implement -> verify -> repair -> learn.
+All mutations continue through the permission-gated ToolExecutor.
 """
 from __future__ import annotations
 
 import json
 from typing import Any
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from core.agents.runtime import agent_runtime
 from core.memory import memory_store
@@ -16,26 +16,48 @@ from core.runtime.executor import tool_executor
 from core.runtime.langchain_tools import get_langchain_tools, serialize_tool_result
 from providers.nvidia.client import get_model
 
-
 LOOP_PROMPT = """You are FRIDAY's Developer Agent.
-You are operating an engineering loop, not merely answering a question.
+Operate as an engineering loop: inspect -> plan -> implement -> verify -> repair -> finish.
 Inspect before changing anything. Prefer the smallest coherent implementation.
-Use available tools for real evidence. Never invent file contents or test results.
-After implementation, verify with the project's existing test/build/lint commands when available.
-If verification fails, diagnose and repair, bounded by the supplied iteration limit.
-Never expose private reasoning. Return only concise action plans, tool decisions, or final engineering summaries.
-Mutating tools remain permission-gated by the runtime; never bypass those checks.
+Use tools for real evidence. Never invent file contents or test results.
+After implementation, run appropriate project tests/build/lint commands when available.
+If verification fails, diagnose and repair within the bounded iteration limit.
+Never expose private reasoning. Return only the final engineering summary.
+All mutating operations must go through FRIDAY's permission-gated executor.
 """
 
 
 class DeveloperLoop:
-    def __init__(self, max_iterations: int = 4):
+    def __init__(self, max_iterations: int = 4, allow_mutations: bool = False):
         self.max_iterations = max(1, min(max_iterations, 8))
+        self.allow_mutations = allow_mutations
 
     async def _tool(self, name: str, args: dict[str, Any], history: list[dict[str, Any]]) -> Any:
-        result = await tool_executor.execute(name, args, agent="Developer Agent")
+        result = await tool_executor.execute(name, args, agent="Developer Agent", confirmed=self.allow_mutations)
         history.append({"tool": name, "arguments": args, "result": result})
         return result
+
+    async def _drive(self, model, messages: list[Any], history: list[dict[str, Any]], rounds: int = 4) -> str:
+        final_text = ""
+        for _ in range(rounds):
+            response = await model.ainvoke(messages)
+            messages.append(response)
+            calls = list(getattr(response, "tool_calls", []) or [])
+            if not calls:
+                final_text = str(getattr(response, "content", ""))
+                break
+            for call in calls:
+                name = str(call.get("name", ""))
+                args = call.get("args") or {}
+                if not isinstance(args, dict):
+                    args = {}
+                try:
+                    result = await self._tool(name, args, history)
+                    messages.append(ToolMessage(content=serialize_tool_result(result), tool_call_id=call.get("id") or name))
+                except Exception as error:
+                    history.append({"tool": name, "arguments": args, "error": str(error)})
+                    messages.append(ToolMessage(content=f"Tool failed: {error}", tool_call_id=call.get("id") or name))
+        return final_text
 
     async def run(self, goal: str, repository: str | None = None) -> dict[str, Any]:
         agent = "Developer Agent"
@@ -45,8 +67,6 @@ class DeveloperLoop:
         state: dict[str, Any] = {"goal": goal, "repository": repository, "iteration": 0, "verified": False}
 
         await agent_runtime.emit("planning", "Developer loop plan", "Preparing an inspect → implement → verify cycle.", agent=agent, status="running")
-
-        # First pass: establish workspace and Git state.
         await self._tool("filesystem.list", {"path": "."}, history)
         await self._tool("git.status", {}, history)
 
@@ -58,26 +78,11 @@ class DeveloperLoop:
                 "goal": goal,
                 "repository": repository,
                 "phase": "inspect_and_plan",
-                "instruction": "Use tools to inspect the workspace, identify relevant files, and form an implementation plan. Do not mutate yet.",
+                "instruction": "Inspect the workspace and relevant files, then prepare the implementation plan. Do not mutate during this phase.",
             }, ensure_ascii=False)),
         ]
-
-        # Planning/inspection phase is model-driven and evidence-backed.
-        for _ in range(3):
-            response = await model.ainvoke(messages)
-            messages.append(response)
-            calls = list(getattr(response, "tool_calls", []) or [])
-            if not calls:
-                break
-            for call in calls:
-                name = str(call.get("name", ""))
-                args = call.get("args") or {}
-                if not isinstance(args, dict):
-                    args = {}
-                result = await self._tool(name, args, history)
-                messages.append({"role": "tool", "content": serialize_tool_result(result), "tool_call_id": call.get("id", name)})
-
-        await agent_runtime.emit("planning", "Implementation plan ready", "Inspection evidence is available; beginning approved implementation work.", agent=agent, status="completed")
+        plan_summary = await self._drive(model, messages, history, rounds=3)
+        await agent_runtime.emit("planning", "Implementation plan ready", "Inspection evidence is available; beginning implementation work.", agent=agent, status="completed")
 
         for iteration in range(1, self.max_iterations + 1):
             state["iteration"] = iteration
@@ -87,36 +92,24 @@ class DeveloperLoop:
                 "repository": repository,
                 "phase": "implement_and_verify",
                 "iteration": iteration,
-                "instruction": "Implement the next required change using tools. Then run appropriate verification. If verification fails, fix it in the next cycle. Stop when the goal is genuinely satisfied.",
+                "mutations_enabled": self.allow_mutations,
+                "instruction": "Implement the next required change using tools. Run appropriate verification. If verification fails, repair it. If mutations are disabled, report the exact proposed changes instead of attempting writes.",
             }, ensure_ascii=False)))
-            response = await model.ainvoke(messages)
-            messages.append(response)
-            calls = list(getattr(response, "tool_calls", []) or [])
-            if not calls:
-                text = str(getattr(response, "content", ""))
-                state["last_model_summary"] = text[:2000]
-                if "verified" in text.lower() or "complete" in text.lower():
-                    state["verified"] = True
-                    break
-                continue
-            for call in calls:
-                name = str(call.get("name", ""))
-                args = call.get("args") or {}
-                if not isinstance(args, dict):
-                    args = {}
-                try:
-                    result = await self._tool(name, args, history)
-                    messages.append({"role": "tool", "content": serialize_tool_result(result), "tool_call_id": call.get("id", name)})
-                except Exception as error:
-                    history.append({"tool": name, "arguments": args, "error": str(error)})
-                    messages.append({"role": "tool", "content": f"Tool failed: {error}", "tool_call_id": call.get("id", name)})
-            await agent_runtime.emit("verification", f"Iteration {iteration} completed", "Tool execution finished; checking whether the goal is satisfied.", agent=agent, status="completed")
+            final_text = await self._drive(model, messages, history, rounds=4)
+            state["last_model_summary"] = final_text[:3000]
+            if any(word in final_text.lower() for word in ("verified", "tests pass", "successfully completed", "goal is complete")):
+                state["verified"] = True
+                await agent_runtime.emit("verification", f"Iteration {iteration} verified", "The developer agent reports the goal is satisfied.", agent=agent, status="completed")
+                break
+            await agent_runtime.emit("verification", f"Iteration {iteration} completed", "The goal is not yet verified; continuing within the bounded loop.", agent=agent, status="completed")
 
         summary = {
             "goal": goal,
             "repository": repository,
             "iterations": state["iteration"],
             "verified": state["verified"],
+            "mutations_enabled": self.allow_mutations,
+            "plan_summary": plan_summary[:2000],
             "history": history[-40:],
             "summary": state.get("last_model_summary", "Developer loop completed its bounded execution window."),
         }
