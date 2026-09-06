@@ -23,6 +23,7 @@ from tools.github.github_tools import (
     github_list_branches,
     github_get_commit,
 )
+from tools.github.api_tool import github_api
 from tools.os.os_tools import (
     os_system_info,
     os_list_processes,
@@ -64,6 +65,7 @@ def register_all_tools():
     tool_registry.register(name="github.code.search", func=github_search_code, description="Search code in accessible GitHub repositories, optionally scoped to one repository.", permission=PermissionLevel.SAFE, parameters={"query": "string", "repository": "string", "limit": "number"})
     tool_registry.register(name="github.branches", func=github_list_branches, description="List branches for an accessible GitHub repository.", permission=PermissionLevel.SAFE, parameters={"repository": "string", "limit": "number", "page": "number"})
     tool_registry.register(name="github.commit", func=github_get_commit, description="Fetch one commit with metadata, stats, and changed-file patches.", permission=PermissionLevel.SAFE, parameters={"repository": "string", "sha": "string"})
+    tool_registry.register(name="github.api", func=github_api, description="Universal GitHub REST API tool. Use for any GitHub operation that does not have a dedicated github.* tool. Supports GET, POST, PUT, PATCH and DELETE; mutations are permission-gated by the runtime.", permission=PermissionLevel.PERMISSION_REQUIRED, parameters={"method": "string", "path": "string", "params": "object", "body": "object"})
 
     tool_registry.register(name="os.system_info", func=os_system_info, description="Inspect operating-system and host information.", permission=PermissionLevel.SAFE)
     tool_registry.register(name="os.processes", func=os_list_processes, description="List running processes without command-line arguments.", permission=PermissionLevel.SAFE, parameters={"limit": "number"})
