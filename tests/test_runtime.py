@@ -38,26 +38,43 @@ async def test_filesystem_read():
 
 
 @pytest.mark.asyncio
+async def test_sync_cognition_tools_execute_without_await_type_errors():
+    learned = await tool_executor.execute(
+        "cognition.learn",
+        {
+            "kind": "lesson",
+            "title": "Executor handles sync tools",
+            "lesson": "Synchronous registered tools are executed without awaiting their return value.",
+            "context": "runtime regression test",
+        },
+    )
+    assert learned["stored"] is True
+
+    recalled = await tool_executor.execute(
+        "cognition.recall",
+        {"query": "Executor handles sync tools", "limit": 1},
+    )
+    assert isinstance(recalled, list)
+    assert recalled
+
+
+@pytest.mark.asyncio
 async def test_create_and_verify():
     test_file = "friday_agent_test.txt"
     test_content = "FRIDAY REAL AGENT TEST SUCCESSFUL"
 
-    # Create file
     create_res = await tool_executor.execute(
         "filesystem.create",
         {"path": test_file, "content": test_content, "overwrite": True}
     )
     assert "created" in create_res.lower()
 
-    # Verify file physically exists
     filepath = get_workspace_root() / test_file
     assert filepath.exists()
 
-    # Read file back
     read_res = await tool_executor.execute("filesystem.read", {"path": test_file})
     assert read_res == test_content
 
-    # Clean up
     if filepath.exists():
         os.remove(filepath)
 
