@@ -1,23 +1,43 @@
 """Deterministic GitHub repository analysis workflow.
 
-This module deliberately does not ask an LLM to decide which GitHub calls to make.
-It resolves the repository, fetches its metadata and full tree, then selects the most
-useful documentation/configuration/entry-point files for inspection. This makes
-repository understanding work even when the NVIDIA model is temporarily unavailable
-for native tool calling.
+The repository agent is deliberately deterministic: it resolves the repository, fetches
+metadata and the complete Git tree, then selects useful documentation/configuration/
+entry-point files. It does not depend on an LLM successfully choosing tool calls.
+
+Authenticated requests use FRIDAY's GitHub PAT when available, so private repositories
+owned by or accessible to the configured account work. Public repositories are also
+supported without a PAT through GitHub's public REST endpoints.
 """
 
 from __future__ import annotations
 
+import base64
+from pathlib import Path
 from typing import Any
+from urllib.parse import quote, urlparse
 
-from tools.github.github_tools import (
-    github_get_repository,
-    github_get_tree,
-    github_read_file,
-    github_list_commits,
-)
+import httpx
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
+GITHUB_API = "https://api.github.com"
+GITHUB_API_VERSION = "2022-11-28"
+MAX_FILE_CHARS = 150_000
+MAX_TREE_ITEMS = 20_000
+
+
+class GitHubAgentSettings(BaseSettings):
+    username: str = ""
+    pat: str = ""
+    api_version: str = GITHUB_API_VERSION
+
+    model_config = SettingsConfigDict(
+        env_file=str(Path(__file__).resolve().parents[2] / ".env"),
+        env_prefix="GITHUB_",
+        extra="ignore",
+    )
+
+
+settings = GitHubAgentSettings()
 
 TEXT_EXTENSIONS = {
     ".md", ".mdx", ".txt", ".json", ".jsonc", ".yaml", ".yml", ".toml",
@@ -28,7 +48,7 @@ TEXT_EXTENSIONS = {
 }
 
 IMPORTANT_EXACT = {
-    "readme.md", "package.json", "pnpm-workspace.yaml", "turbo.json",
+    "readme.md", "readme.mdx", "package.json", "pnpm-workspace.yaml", "turbo.json",
     "nx.json", "pyproject.toml", "requirements.txt", "requirements-dev.txt",
     "cargo.toml", "go.mod", "pom.xml", "build.gradle", "dockerfile",
     "docker-compose.yml", "docker-compose.yaml", "next.config.js", "next.config.mjs",
@@ -48,19 +68,80 @@ SKIP_PREFIXES = (
 )
 
 
+def _headers() -> dict[str, str]:
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": settings.api_version or GITHUB_API_VERSION,
+        "User-Agent": "FRIDAY-Personal-AI",
+    }
+    if settings.pat.strip():
+        headers["Authorization"] = f"Bearer {settings.pat.strip()}"
+    return headers
+
+
+async def _request(path: str, params: dict[str, Any] | None = None) -> Any:
+    timeout = httpx.Timeout(20.0, connect=7.0, read=20.0, write=20.0, pool=10.0)
+    async with httpx.AsyncClient(base_url=GITHUB_API, headers=_headers(), timeout=timeout) as client:
+        try:
+            response = await client.get(path, params=params)
+        except httpx.RequestError as error:
+            raise RuntimeError(f"GitHub network request failed: {error}") from error
+        if response.status_code >= 400:
+            try:
+                detail = response.json().get("message", "GitHub request failed")
+            except Exception:
+                detail = response.text[:300]
+            if response.status_code in {401, 403} and not settings.pat.strip():
+                raise RuntimeError(
+                    f"GitHub API {response.status_code}: {detail}. "
+                    "This repository or endpoint requires GITHUB_PAT."
+                )
+            raise RuntimeError(f"GitHub API {response.status_code}: {detail}")
+        return response.json()
+
+
+def _repo_parts(value: str) -> tuple[str | None, str]:
+    raw = value.strip().removesuffix(".git").strip("/")
+    if raw.startswith(("https://github.com/", "http://github.com/")):
+        parsed = urlparse(raw)
+        parts = [part for part in parsed.path.split("/") if part]
+    else:
+        parts = [part for part in raw.split("/") if part]
+    if len(parts) >= 2:
+        return parts[0], parts[1]
+    if len(parts) == 1:
+        return settings.username.strip() or None, parts[0]
+    raise ValueError(f"Invalid GitHub repository: {value}")
+
+
+async def _resolve_repository(value: str) -> str:
+    owner, name = _repo_parts(value)
+    if owner:
+        data = await _request(f"/repos/{owner}/{name}")
+        return str(data.get("full_name") or f"{owner}/{name}")
+
+    data = await _request("/search/repositories", {"q": f"{name} in:name", "per_page": 10})
+    items = data.get("items") or []
+    exact = next((item for item in items if str(item.get("name", "")).lower() == name.lower()), None)
+    chosen = exact or (items[0] if items else None)
+    if not chosen:
+        raise RuntimeError(f"Could not resolve public GitHub repository: {name}")
+    return str(chosen.get("full_name"))
+
+
 def _score_path(path: str) -> int:
     clean = path.replace("\\", "/").lower()
     name = clean.rsplit("/", 1)[-1]
-    score = 0
+    if any(clean.startswith(prefix) for prefix in SKIP_PREFIXES):
+        return -10000
 
+    score = 0
     if clean in IMPORTANT_EXACT:
         score += 1000
     if name in {"readme.md", "readme.mdx"}:
         score += 900
     if name in {"package.json", "pyproject.toml", "requirements.txt", "go.mod", "cargo.toml"}:
         score += 850
-    if any(clean.startswith(prefix) for prefix in SKIP_PREFIXES):
-        return -10000
     if any(clean.startswith(prefix) for prefix in IMPORTANT_DIRS):
         score += 120
 
@@ -93,71 +174,92 @@ def _select_files(tree: list[dict[str, Any]], max_files: int) -> list[str]:
         score = _score_path(path)
         if score > -1000:
             candidates.append((score, path))
-
     candidates.sort(key=lambda pair: (-pair[0], pair[1]))
-    selected: list[str] = []
-    seen: set[str] = set()
-    for _, path in candidates:
-        if path in seen:
-            continue
-        seen.add(path)
-        selected.append(path)
-        if len(selected) >= max_files:
-            break
-    return selected
+    return [path for _, path in candidates[:max_files]]
 
 
-async def github_analyze_repository(
-    repository: str,
-    ref: str | None = None,
-    max_files: int = 16,
-    commit_limit: int = 8,
-) -> dict[str, Any]:
-    """Build a bounded repository dossier using GitHub tools only.
+async def _repository_metadata(repository: str) -> dict[str, Any]:
+    data = await _request(f"/repos/{repository}")
+    return {
+        "name": data.get("name"), "full_name": data.get("full_name"),
+        "private": data.get("private"), "fork": data.get("fork"),
+        "archived": data.get("archived"), "description": data.get("description"),
+        "language": data.get("language"), "default_branch": data.get("default_branch"),
+        "stars": data.get("stargazers_count", 0), "forks": data.get("forks_count", 0),
+        "open_issues": data.get("open_issues_count", 0), "size_kb": data.get("size", 0),
+        "created_at": data.get("created_at"), "updated_at": data.get("updated_at"),
+        "pushed_at": data.get("pushed_at"), "homepage": data.get("homepage"),
+        "license": (data.get("license") or {}).get("spdx_id"),
+        "topics": data.get("topics", []), "owner": (data.get("owner") or {}).get("login"),
+        "permissions": data.get("permissions", {}), "html_url": data.get("html_url"),
+    }
 
-    Private repositories are accessed with FRIDAY's configured GitHub PAT; public
-    repositories work without a PAT as long as GitHub permits the public request.
-    The result contains metadata, the complete tree, recent commits, and contents
-    of the most informative text/configuration files.
-    """
+
+async def _tree(repository: str, ref: str) -> tuple[list[dict[str, Any]], bool]:
+    commit = await _request(f"/repos/{repository}/commits/{quote(ref, safe='')}")
+    tree_sha = ((commit.get("commit") or {}).get("tree") or {}).get("sha")
+    if not tree_sha:
+        raise RuntimeError(f"Could not resolve Git tree for {repository}@{ref}")
+    data = await _request(f"/repos/{repository}/git/trees/{tree_sha}", {"recursive": "1"})
+    partial = bool(data.get("truncated"))
+    items = list(data.get("tree", []))[:MAX_TREE_ITEMS]
+    return [
+        {"path": item.get("path"), "mode": item.get("mode"), "type": item.get("type"), "sha": item.get("sha"), "size": item.get("size"), "url": item.get("url")}
+        for item in items
+    ], partial
+
+
+async def _read_file(repository: str, path: str, ref: str) -> dict[str, Any]:
+    encoded_path = quote(path.strip().lstrip("/"), safe="/")
+    data = await _request(f"/repos/{repository}/contents/{encoded_path}", {"ref": ref})
+    content = data.get("content") or ""
+    if data.get("encoding") == "base64":
+        try:
+            content = base64.b64decode(content).decode("utf-8")
+        except UnicodeDecodeError:
+            return {"path": path, "binary": True, "size": data.get("size")}
+    if len(content) > MAX_FILE_CHARS:
+        content = content[:MAX_FILE_CHARS] + "\n\n[OUTPUT TRUNCATED]"
+    return {"path": path, "size": data.get("size"), "content": content}
+
+
+async def _recent_commits(repository: str, limit: int) -> list[dict[str, Any]]:
+    data = await _request(f"/repos/{repository}/commits", {"per_page": limit})
+    return [
+        {"sha": item.get("sha"), "message": (item.get("commit") or {}).get("message", "").split("\n", 1)[0],
+         "author": (item.get("author") or {}).get("login") or (item.get("commit") or {}).get("author", {}).get("name"),
+         "date": (item.get("commit") or {}).get("author", {}).get("date"), "html_url": item.get("html_url")}
+        for item in data
+    ]
+
+
+async def github_analyze_repository(repository: str, ref: str | None = None, max_files: int = 16, commit_limit: int = 8) -> dict[str, Any]:
+    """Build a bounded evidence dossier for any accessible GitHub repository."""
     max_files = max(4, min(max_files, 30))
     commit_limit = max(0, min(commit_limit, 20))
-
-    metadata = await github_get_repository(repository)
-    canonical = str(metadata.get("full_name") or repository)
-    tree = await github_get_tree(canonical, ref=ref, recursive=True)
+    canonical = await _resolve_repository(repository)
+    metadata = await _repository_metadata(canonical)
+    target_ref = ref or str(metadata.get("default_branch") or "main")
+    tree, partial = await _tree(canonical, target_ref)
     selected_paths = _select_files(tree, max_files)
 
     files: list[dict[str, Any]] = []
     for path in selected_paths:
         try:
-            result = await github_read_file(canonical, path, ref=ref)
-            files.append({
-                "path": path,
-                "size": result.get("size"),
-                "content": result.get("content", ""),
-            })
+            files.append(await _read_file(canonical, path, target_ref))
         except Exception as error:
             files.append({"path": path, "error": str(error)})
 
-    commits: list[dict[str, Any]] = []
-    if commit_limit:
-        try:
-            commits = await github_list_commits(canonical, limit=commit_limit)
-        except Exception as error:
-            commits = [{"error": str(error)}]
-
+    commits = await _recent_commits(canonical, commit_limit) if commit_limit else []
     return {
-        "repository": metadata,
-        "ref": ref or metadata.get("default_branch"),
-        "tree": tree,
-        "tree_count": len(tree),
-        "selected_files": selected_paths,
-        "files": files,
+        "repository": metadata, "ref": target_ref, "tree": tree, "tree_count": len(tree),
+        "tree_is_partial": partial, "selected_files": selected_paths, "files": files,
         "recent_commits": commits,
+        "access": "private-authenticated" if metadata.get("private") else "public",
         "analysis_notes": [
-            "Repository identity and tree were fetched from GitHub.",
-            "Selected files were prioritized by documentation, configuration, architecture, and entry-point relevance.",
-            "The full tree is included so a later reasoning step can identify additional files to inspect.",
+            "Repository identity was resolved from GitHub.",
+            "The Git tree was requested recursively; very large repositories may return a partial tree.",
+            "Files were prioritized by documentation, configuration, architecture, and application entry-point relevance.",
+            "Use github.file.read or github.code.search for deeper targeted inspection after this dossier.",
         ],
     }
