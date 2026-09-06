@@ -21,6 +21,13 @@ def test_dotted_registry_names_are_mapped_back_to_internal_names():
     assert registry_tool_name("github.tree") == "github.tree"
 
 
+def test_dotted_provider_tool_names_round_trip_to_registry():
+    model_names = [tool.name for tool in get_langchain_tools()]
+    assert "filesystem__list" in model_names
+    assert "github__analyze" in model_names
+    assert registry_tool_name("github__analyze") == "github.analyze"
+
+
 def test_github_arguments_normalize_common_model_aliases():
     result = _normalize_github_arguments(
         "github.tree",
