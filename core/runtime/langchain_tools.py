@@ -80,7 +80,7 @@ def registry_tool_name(model_name: str) -> str:
 
 
 def tool_names() -> list[str]:
-    """Return the internal FRIDAY tool names exposed to the bridge."""
+    """Return the internal FRIDAY tool names exposed by the bridge."""
     return [metadata["name"] for metadata in tool_registry.list_tools()]
 
 
