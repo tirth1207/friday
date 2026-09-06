@@ -23,6 +23,7 @@ from tools.github.github_tools import (
     github_list_branches,
     github_get_commit,
 )
+from tools.github.repository_agent import github_analyze_repository
 from tools.github.api_tool import github_api
 from tools.os.os_tools import (
     os_system_info,
@@ -44,7 +45,7 @@ def register_all_tools():
     tool_registry.register(name="filesystem.read", func=read_file, description="Read a file in the configured workspace.", permission=PermissionLevel.SAFE, parameters={"path": "string"})
     tool_registry.register(name="filesystem.write", func=write_file, description="Write a file in the configured workspace.", permission=PermissionLevel.PERMISSION_REQUIRED, parameters={"path": "string", "content": "string"})
     tool_registry.register(name="filesystem.create", func=create_file, description="Create a file in the configured workspace.", permission=PermissionLevel.PERMISSION_REQUIRED, parameters={"path": "string", "content": "string", "overwrite": "boolean"})
-    tool_registry.register(name="filesystem.exists", func=file_exists, description="Check a workspace path.", permission=PermissionLevel.SAFE, parameters={"path": "string"})
+    tool_registry.register(name="filesystem.exists", func=file_exists, description="Check a workspace path.", permission=PermissionLevel.SAFE)
 
     tool_registry.register(name="terminal.execute", func=execute_command, description="Execute a terminal command in the workspace.", permission=PermissionLevel.PERMISSION_REQUIRED, parameters={"command": "string", "timeout": "number"})
 
@@ -56,6 +57,7 @@ def register_all_tools():
     tool_registry.register(name="github.profile", func=github_get_profile, description="Fetch GitHub profile using configured credentials.", permission=PermissionLevel.SAFE, parameters={"username": "string"})
     tool_registry.register(name="github.repositories", func=github_list_repositories, description="List repositories accessible to the authenticated GitHub account, including permitted private repositories.", permission=PermissionLevel.SAFE, parameters={"username": "string", "limit": "number", "sort": "string", "page": "number"})
     tool_registry.register(name="github.repository", func=github_get_repository, description="Fetch one GitHub repository's metadata from owner/name or URL.", permission=PermissionLevel.SAFE, parameters={"repository": "string"})
+    tool_registry.register(name="github.analyze", func=github_analyze_repository, description="Build a bounded evidence dossier for any accessible GitHub repository by fetching metadata, the complete Git tree, important files, and recent commits. Use this first for repository explanations or architecture understanding.", permission=PermissionLevel.SAFE, parameters={"repository": "string", "ref": "string", "max_files": "number", "commit_limit": "number"})
     tool_registry.register(name="github.commits", func=github_list_commits, description="Fetch recent commits for a GitHub repository.", permission=PermissionLevel.SAFE, parameters={"repository": "string", "limit": "number", "page": "number"})
     tool_registry.register(name="github.contents", func=github_get_contents, description="Fetch a repository file or directory listing at an optional branch, tag, or commit.", permission=PermissionLevel.SAFE, parameters={"repository": "string", "path": "string", "ref": "string"})
     tool_registry.register(name="github.file.read", func=github_read_file, description="Read one UTF-8 text file from any accessible GitHub repository.", permission=PermissionLevel.SAFE, parameters={"repository": "string", "path": "string", "ref": "string"})
