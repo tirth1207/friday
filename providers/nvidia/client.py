@@ -13,9 +13,10 @@ def _is_hosted() -> bool:
 def get_model(require_tools: bool = False):
     """Create the NVIDIA model used by FRIDAY.
 
-    Hosted NVIDIA inference is pinned to the documented Nemotron 3 Super model instead
-    of probing the model catalog on every process startup. This prevents an old model
-    name in .env from breaking tool calling and removes the extra catalog request.
+    FRIDAY keeps model reasoning private: Nemotron's thinking mode is disabled for
+    user-facing generations, while the UI receives explicit execution events for
+    agent/tool progress. A larger generation budget also prevents long repository
+    explanations from being cut off.
     """
     if _is_hosted() and not settings.api_key.strip():
         raise RuntimeError(
@@ -31,4 +32,5 @@ def get_model(require_tools: bool = False):
         api_key=settings.api_key,
         base_url=settings.base_url,
         temperature=0.2,
-    )
+        max_completion_tokens=8192,
+    ).with_thinking_mode(enabled=False)
