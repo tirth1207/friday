@@ -3,13 +3,25 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
+import re
+import shutil
 from pathlib import Path
 from typing import Any
 
 from core.config import settings
-from core.github_oauth import refresh_connection_if_needed, load_connection
+from core.github_oauth import load_connection, refresh_connection_if_needed
 
-_REPOSITORY = __import__("re").compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+
+def _remove_failed_target(target: Path) -> None:
+    """Remove only the task-specific clone directory after a failed clone."""
+    try:
+        if target.is_dir():
+            shutil.rmtree(target)
+    except OSError:
+        pass
 
 
 async def prepare_repository_workspace(repository: str, ref: str | None = None) -> dict[str, Any]:
@@ -30,17 +42,18 @@ async def prepare_repository_workspace(repository: str, ref: str | None = None) 
     if git_dir.is_dir():
         return {"repository": repo, "ref": ref, "workspace": str(target), "reused": True}
 
-    target.mkdir(parents=True, exist_ok=True)
-    if any(target.iterdir()):
-        raise RuntimeError(f"Execution workspace is not empty: {target}")
+    # A previous interrupted/failed clone may have left a partial directory behind.
+    if target.exists():
+        _remove_failed_target(target)
 
+    target.parent.mkdir(parents=True, exist_ok=True)
     clone_url = f"https://github.com/{repo}.git"
     command = ["git", "clone", "--depth", "1"]
     if ref:
         command.extend(["--branch", ref])
     command.extend([clone_url, str(target)])
 
-    env = __import__("os").environ.copy()
+    env = os.environ.copy()
     # Git reads the OAuth token through an ephemeral askpass helper; the token is never placed in argv.
     token = str((load_connection() or {}).get("access_token") or "").strip()
     if token:
@@ -56,10 +69,7 @@ async def prepare_repository_workspace(repository: str, ref: str | None = None) 
     )
     stdout, stderr = await process.communicate()
     if process.returncode != 0:
-        try:
-            target.rmdir()
-        except OSError:
-            pass
+        _remove_failed_target(target)
         error = stderr.decode("utf-8", errors="replace")[-4000:]
         raise RuntimeError(f"Could not prepare repository workspace: {error}")
 
