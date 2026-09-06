@@ -106,12 +106,7 @@ def _normalize_github_arguments(tool_name: str, arguments: dict[str, Any]) -> di
 
 
 def _extract_pseudo_tool_call(content: Any) -> tuple[str, dict[str, Any]] | None:
-    """Recover tool calls emitted as JSON/text by models that fail native tool-call formatting.
-
-    NVIDIA documents native bind_tools support, but only tool-capable models reliably return
-    AIMessage.tool_calls. This compatibility path prevents a JSON-shaped tool request from
-    being shown to the user or silently treated as a final answer.
-    """
+    """Recover tool calls emitted as JSON/text by models that fail native tool-call formatting."""
     if not isinstance(content, str):
         return None
 
@@ -199,7 +194,7 @@ async def _run_structured_agent(
 ) -> str:
     langchain_tools = get_langchain_tools()
     tool_by_model_name = {tool.name: tool for tool in langchain_tools}
-    model = get_model().bind_tools(langchain_tools)
+    model = get_model(require_tools=True).bind_tools(langchain_tools)
 
     system_text = (
         f"{SYSTEM_PROMPT}\n\n"
@@ -222,15 +217,13 @@ async def _run_structured_agent(
         messages.append(response)
         tool_calls = list(response.tool_calls or [])
 
-        # Compatibility with providers/models that emit a JSON-shaped tool request as
-        # normal message content instead of populating AIMessage.tool_calls.
         if not tool_calls:
             pseudo_call = _extract_pseudo_tool_call(response.content)
             if pseudo_call:
                 pseudo_name, pseudo_args = pseudo_call
                 call_id = f"compat-{len(history) + 1}"
                 try:
-                    result, registry_name = await _execute_structured_tool(
+                    result, _ = await _execute_structured_tool(
                         pseudo_name,
                         pseudo_args,
                         tool_by_model_name,
@@ -295,9 +288,7 @@ async def _run_structured_agent(
                     )
                 )
 
-    # If the model keeps selecting tools until the round limit, perform one final
-    # answer-only call with the grounded execution history rather than exposing JSON.
-    fallback = await get_model().ainvoke(
+    fallback = await get_model(require_tools=False).ainvoke(
         [
             SystemMessage(content=SYSTEM_PROMPT),
             HumanMessage(
