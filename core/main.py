@@ -8,27 +8,19 @@ from pydantic import BaseModel
 from core.github_context import clear_active_repository, get_active_repository, set_active_repository
 from core.github_diagnostics import list_github_diagnostics, run_github_diagnostic
 from core.github_oauth import (
-    apply_connection_to_github_tools,
-    authorization_url,
-    clear_connection,
-    connection_status,
-    exchange_code,
-    refresh_connection_if_needed,
-    settings as github_oauth_settings,
+    apply_connection_to_github_tools, authorization_url, clear_connection, connection_status,
+    exchange_code, refresh_connection_if_needed, settings as github_oauth_settings,
 )
 from core.github_repositories import list_selectable_repositories
+from core.memory import memory_store
 from core.orchestrator_structured import ask_friday
 from services.api.websocket import friday_websocket
 
-
-app = FastAPI(title="FRIDAY", description="Personal AI Operating Layer", version="0.1.0")
-
+app = FastAPI(title="FRIDAY", description="Personal AI Operating Layer", version="0.2.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
 
 
@@ -42,21 +34,9 @@ class RepositoryContextRequest(BaseModel):
 
 
 def _explicit_repository_from_message(message: str) -> str | None:
-    """Extract an explicit owner/repository target, including UI-prefixed text."""
     text = message or ""
-
-    # Accept both normal text and UI/composer forms such as:
-    #   Repository tirth1207/AGI_Maze
-    #   Repository:tirth1207/AGI_Maze
-    #   Repositorytirth1207/AGI_Maze
-    match = re.search(
-        r"(?:\brepository\b\s*[:\-]?\s*)?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b",
-        text,
-        re.IGNORECASE,
-    )
-    if not match:
-        return None
-    return match.group(1).removesuffix(".git")
+    match = re.search(r"(?:\brepository\b\s*[:\-]?\s*)?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b", text, re.IGNORECASE)
+    return match.group(1).removesuffix(".git") if match else None
 
 
 @app.on_event("startup")
@@ -67,12 +47,24 @@ async def startup() -> None:
 
 @app.get("/")
 async def root():
-    return {"name": "FRIDAY", "status": "online", "version": "0.1.0"}
+    return {"name": "FRIDAY", "status": "online", "version": "0.2.0"}
 
 
 @app.get("/health")
 async def health():
     return {"status": "healthy", "github": connection_status(), "active_repository": get_active_repository()}
+
+
+@app.get("/conversations")
+async def conversations(limit: int = 80):
+    """Return recent persisted chat messages for the collapsible history sidebar."""
+    return {"conversations": memory_store.get_conversations(limit)}
+
+
+@app.get("/memory/experiences")
+async def experiences(query: str = "", limit: int = 20):
+    """Return learned experiences for future cognition/debugging surfaces."""
+    return {"experiences": memory_store.search_experiences(query, limit)}
 
 
 @app.get("/auth/github")
@@ -106,17 +98,14 @@ async def github_auth_status():
 
 @app.post("/auth/github/disconnect")
 async def github_auth_disconnect():
-    clear_connection()
-    clear_active_repository()
+    clear_connection(); clear_active_repository()
     from tools.github.repository_agent import settings as github_settings
-    github_settings.pat = ""
-    github_settings.username = ""
+    github_settings.pat = ""; github_settings.username = ""
     return {"connected": False, "active_repository": None}
 
 
 @app.get("/auth/github/repositories")
 async def github_repositories():
-    """List repositories available to the connected GitHub account for explicit selection."""
     try:
         await refresh_connection_if_needed()
         repositories = await list_selectable_repositories(limit=100)
@@ -132,11 +121,9 @@ async def github_repository_context():
 
 @app.post("/auth/github/repository-context")
 async def github_repository_context_set(request: RepositoryContextRequest):
-    """Set the active repository from the JSON body sent by the web client."""
     repository = request.repository
     if repository is None or not repository.strip():
-        clear_active_repository()
-        return {"repository": None}
+        clear_active_repository(); return {"repository": None}
     try:
         await refresh_connection_if_needed()
         from tools.github.repository_agent import _resolve_repository
@@ -149,20 +136,16 @@ async def github_repository_context_set(request: RepositoryContextRequest):
 
 @app.get("/auth/github/diagnostics")
 async def github_diagnostics():
-    """List direct GitHub API diagnostics. This endpoint does not invoke the AI."""
     try:
-        await refresh_connection_if_needed()
-        return {"tests": await list_github_diagnostics()}
+        await refresh_connection_if_needed(); return {"tests": await list_github_diagnostics()}
     except Exception as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
 
 
 @app.get("/auth/github/diagnostics/{test_id}")
 async def github_diagnostic(test_id: str, repository: str | None = None):
-    """Run one direct GitHub GET request, bypassing FRIDAY's AI/agent layer."""
     try:
-        await refresh_connection_if_needed()
-        return await run_github_diagnostic(test_id, repository)
+        await refresh_connection_if_needed(); return await run_github_diagnostic(test_id, repository)
     except Exception as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -171,20 +154,12 @@ async def github_diagnostic(test_id: str, repository: str | None = None):
 async def chat(request: ChatRequest):
     try:
         await refresh_connection_if_needed()
-
-        # Current-request repository priority:
-        # 1. Explicit owner/repository written in the message.
-        # 2. Repository explicitly supplied by the UI.
-        # 3. Persisted active repository.
-        # An explicit target in the current message must never be replaced by stale context.
         explicit_repository = _explicit_repository_from_message(request.message)
         repository = explicit_repository or (request.repository.strip() if request.repository else None) or get_active_repository()
-
         if repository:
             from tools.github.repository_agent import _resolve_repository
             repository = await _resolve_repository(repository)
             set_active_repository(repository)
-
         response = await ask_friday(request.message, repository=repository)
         return {"response": response, "repository": repository}
     except Exception as error:
