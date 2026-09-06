@@ -93,9 +93,6 @@ def resolve_request(message: str) -> dict[str, Any]:
         elif previous_user:
             resolved = f"Continue the previous request: {previous_user}. The user's follow-up is: {message.strip()}"
 
-    # Keep GitHub repository context alive for natural follow-ups such as
-    # "what env keys are needed in this project" even when the current message
-    # does not repeat the repository name.
     if platform == "github" and (_is_env_key_request(resolved) or _is_repo_file_read_request(resolved)):
         base_context = active_task or previous_user
         resolved = (
@@ -116,22 +113,17 @@ def resolve_request(message: str) -> dict[str, Any]:
             )
         platform = "github"
 
-    # Repository structure is a repository-specific GitHub operation, not an
-    # account-level repository listing. Make that distinction deterministic so
-    # the orchestrator cannot route "my friday repo structure" to github.repositories.
     if _is_repo_structure_request(resolved):
         resolved = (
             f"{resolved}\n\nMANDATORY EXECUTION REQUIREMENT: this is a specific-repository "
             "project-structure request. Resolve the named repository and use the registered "
-            "tool github.tree with recursive=true to retrieve its directory/file tree. "
+            "tool github.tree with the argument repository=<owner>/<repo> and recursive=true "
+            "to retrieve its directory/file tree. The tool argument MUST be named 'repository'. "
             "DO NOT call github.repositories and DO NOT list the user's other repositories. "
             "Return the structure of the requested repository only."
         )
         platform = "github"
 
-    # Make critical GitHub data requirements explicit to the planner. This is
-    # intentionally deterministic: fetching repository data must not depend on
-    # whether the NVIDIA planner happens to emit a tool call.
     if _is_repo_ranking(resolved):
         resolved = (
             f"{resolved}\n\nMANDATORY EXECUTION REQUIREMENT: before ranking, fetch the user's "
