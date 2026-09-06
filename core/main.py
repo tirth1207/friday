@@ -42,8 +42,14 @@ def _explicit_repository_from_message(message: str) -> str | None:
 def _is_explicit_build_request(message: str) -> bool:
     """Detect direct engineering commands without hijacking normal coding questions."""
     text = (message or "").strip().lower()
-    action = re.search(r"\b(build|implement|finish|complete|fix|repair|refactor|write|create|add|remove|replace|update|ship)\b", text)
-    target = re.search(r"\b(code|feature|project|repo|repository|bug|issue|file|component|frontend|backend|api|app|application|function|test|implementation)\b", text)
+    action = re.search(
+        r"\b(build|implement|finish|complete|fix|repair|refactor|write|create|make|add|remove|replace|update|ship)\b",
+        text,
+    )
+    target = re.search(
+        r"\b(code|feature|project|repo|repository|bug|issue|file|component|frontend|backend|api|app|application|function|test|implementation|improvement|change)\b",
+        text,
+    )
     return bool(action and target)
 
 
