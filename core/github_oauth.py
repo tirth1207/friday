@@ -1,9 +1,4 @@
-"""GitHub App user authorization for FRIDAY.
-
-FRIDAY uses a GitHub App user access token instead of requiring a personal access
- token. The token is encrypted at rest with a local Fernet key and loaded into the
- existing GitHub repository tooling at startup.
-"""
+"""GitHub App user authorization for FRIDAY."""
 
 from __future__ import annotations
 
@@ -26,11 +21,7 @@ class GitHubOAuthSettings(BaseSettings):
     encryption_key: str = ""
     frontend_url: str = "http://localhost:3000"
 
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_prefix="GITHUB_",
-        extra="ignore",
-    )
+    model_config = SettingsConfigDict(env_file=".env", env_prefix="GITHUB_", extra="ignore")
 
 
 settings = GitHubOAuthSettings()
@@ -62,11 +53,7 @@ def authorization_url() -> str:
     for key, expires_at in list(_pending_states.items()):
         if expires_at <= now:
             _pending_states.pop(key, None)
-    query = urlencode({
-        "client_id": settings.app_client_id.strip(),
-        "redirect_uri": settings.redirect_uri.strip(),
-        "state": state,
-    })
+    query = urlencode({"client_id": settings.app_client_id.strip(), "redirect_uri": settings.redirect_uri.strip(), "state": state})
     return f"https://github.com/login/oauth/authorize?{query}"
 
 
@@ -80,12 +67,7 @@ async def exchange_code(code: str, state: str | None) -> dict[str, Any]:
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(
             "https://github.com/login/oauth/access_token",
-            json={
-                "client_id": settings.app_client_id.strip(),
-                "client_secret": settings.app_client_secret.strip(),
-                "code": code,
-                "redirect_uri": settings.redirect_uri.strip(),
-            },
+            json={"client_id": settings.app_client_id.strip(), "client_secret": settings.app_client_secret.strip(), "code": code, "redirect_uri": settings.redirect_uri.strip()},
             headers={"Accept": "application/json"},
         )
         response.raise_for_status()
@@ -99,12 +81,7 @@ async def exchange_code(code: str, state: str | None) -> dict[str, Any]:
 
         user_response = await client.get(
             "https://api.github.com/user",
-            headers={
-                "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {access_token}",
-                "X-GitHub-Api-Version": "2022-11-28",
-                "User-Agent": "FRIDAY-Personal-AI",
-            },
+            headers={"Accept": "application/vnd.github+json", "Authorization": f"Bearer {access_token}", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "FRIDAY-Personal-AI"},
         )
         user_response.raise_for_status()
         user = user_response.json()
@@ -120,6 +97,48 @@ async def exchange_code(code: str, state: str | None) -> dict[str, Any]:
     }
     _save_connection(connection)
     return connection
+
+
+async def refresh_connection_if_needed() -> bool:
+    connection = load_connection()
+    if not connection:
+        return False
+    expires_at = float(connection.get("expires_at") or 0)
+    if expires_at > time.time() + 300:
+        return apply_connection_to_github_tools()
+    refresh_token = str(connection.get("refresh_token") or "").strip()
+    if not refresh_token:
+        return apply_connection_to_github_tools()
+    try:
+        timeout = httpx.Timeout(20.0, connect=7.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                "https://github.com/login/oauth/access_token",
+                json={
+                    "client_id": settings.app_client_id.strip(),
+                    "client_secret": settings.app_client_secret.strip(),
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                },
+                headers={"Accept": "application/json"},
+            )
+            response.raise_for_status()
+            token_data = response.json()
+        if token_data.get("error"):
+            return apply_connection_to_github_tools()
+        access_token = str(token_data.get("access_token") or "").strip()
+        if not access_token:
+            return apply_connection_to_github_tools()
+        connection["access_token"] = access_token
+        connection["expires_at"] = time.time() + int(token_data.get("expires_in", 28800))
+        if token_data.get("refresh_token"):
+            connection["refresh_token"] = token_data["refresh_token"]
+        if token_data.get("refresh_token_expires_in"):
+            connection["refresh_token_expires_at"] = time.time() + int(token_data["refresh_token_expires_in"])
+        _save_connection(connection)
+        return apply_connection_to_github_tools()
+    except Exception:
+        return apply_connection_to_github_tools()
 
 
 def _save_connection(connection: dict[str, Any]) -> None:
@@ -153,22 +172,14 @@ def connection_status() -> dict[str, Any]:
     connection = load_connection()
     if not connection:
         return {"configured": is_configured(), "connected": False}
-    return {
-        "configured": is_configured(),
-        "connected": True,
-        "login": connection.get("login"),
-        "github_user_id": connection.get("github_user_id"),
-        "expires_at": connection.get("expires_at"),
-    }
+    return {"configured": is_configured(), "connected": True, "login": connection.get("login"), "github_user_id": connection.get("github_user_id"), "expires_at": connection.get("expires_at")}
 
 
 def apply_connection_to_github_tools() -> bool:
-    """Load the persisted user token into the existing GitHub tool settings."""
     connection = load_connection()
     if not connection:
         return False
     from tools.github.repository_agent import settings as github_settings
-
     token = str(connection.get("access_token") or "").strip()
     login = str(connection.get("login") or "").strip()
     if not token:
