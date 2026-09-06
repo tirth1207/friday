@@ -48,7 +48,7 @@ def _headers(token: str) -> dict[str, str]:
     }
 
 
-async def _request(token: str, path: str) -> tuple[int, str, Any]:
+async def _request(token: str, path: str) -> tuple[int, str, Any, str | None]:
     timeout = httpx.Timeout(20.0, connect=7.0, read=20.0, write=20.0, pool=10.0)
     async with httpx.AsyncClient(base_url=GITHUB_API, headers=_headers(token), timeout=timeout) as client:
         try:
@@ -59,7 +59,7 @@ async def _request(token: str, path: str) -> tuple[int, str, Any]:
             payload = response.json()
         except Exception:
             payload = response.text[:500]
-        return response.status_code, response.reason_phrase or "", payload
+        return response.status_code, response.reason_phrase or "", payload, response.headers.get("X-Accepted-GitHub-Permissions")
 
 
 def _message(payload: Any, status: int) -> str:
@@ -87,7 +87,7 @@ async def run_github_diagnostic(test_id: str, repository: str | None = None) -> 
 
     branch = "main"
     if spec["needs_repo"]:
-        metadata_status, _, metadata = await _request(token, f"/repos/{repo}")
+        metadata_status, _, metadata, metadata_permissions = await _request(token, f"/repos/{repo}")
         if metadata_status >= 400:
             return {
                 "id": test_id,
@@ -98,6 +98,7 @@ async def run_github_diagnostic(test_id: str, repository: str | None = None) -> 
                 "status": metadata_status,
                 "ok": False,
                 "message": _message(metadata, metadata_status),
+                "accepted_permissions": metadata_permissions,
                 "note": "Repository metadata lookup failed, so this diagnostic could not reach its target endpoint.",
             }
         branch = str((metadata or {}).get("default_branch") or "main")
@@ -106,7 +107,7 @@ async def run_github_diagnostic(test_id: str, repository: str | None = None) -> 
         repo=quote(repo, safe="/"),
         branch=quote(branch, safe=""),
     )
-    status, reason, payload = await _request(token, path)
+    status, reason, payload, accepted_permissions = await _request(token, path)
     return {
         "id": test_id,
         "label": spec["label"],
@@ -117,6 +118,7 @@ async def run_github_diagnostic(test_id: str, repository: str | None = None) -> 
         "ok": 200 <= status < 300,
         "message": _message(payload, status),
         "reason": reason,
+        "accepted_permissions": accepted_permissions,
         "note": "Direct GitHub API call; no LLM, supervisor, or GitHub Agent was used.",
     }
 
