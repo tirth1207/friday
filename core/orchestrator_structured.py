@@ -22,7 +22,7 @@ from core.orchestrator import (
     is_tool_required,
 )
 from core.runtime.executor import tool_executor
-from core.runtime.langchain_tools import get_langchain_tools, serialize_tool_result
+from core.runtime.langchain_tools import get_langchain_tools, registry_tool_name, serialize_tool_result
 from providers.nvidia.client import get_model
 
 
@@ -76,6 +76,7 @@ async def _run_structured_agent(
     recent_messages: list[dict[str, str]],
 ) -> str:
     langchain_tools = get_langchain_tools()
+    tool_by_model_name = {tool.name: tool for tool in langchain_tools}
     model = get_model().bind_tools(langchain_tools)
 
     system_text = (
@@ -106,14 +107,15 @@ async def _run_structured_agent(
             return json.dumps(content, ensure_ascii=False, default=str)
 
         for call in tool_calls:
-            tool_name = str(call.get("name", ""))
+            model_tool_name = str(call.get("name", ""))
+            registry_name = registry_tool_name(model_tool_name)
             arguments = call.get("args") or {}
-            call_id = call.get("id") or tool_name
+            call_id = call.get("id") or model_tool_name
 
-            if not tool_name:
+            if not model_tool_name or model_tool_name not in tool_by_model_name:
                 messages.append(
                     ToolMessage(
-                        content="Tool call rejected: missing tool name.",
+                        content=f"Tool call rejected: unknown tool '{model_tool_name}'.",
                         tool_call_id=call_id,
                     )
                 )
@@ -122,29 +124,30 @@ async def _run_structured_agent(
             if not isinstance(arguments, dict):
                 arguments = {}
 
-            agent_name = _agent_for_tool(tool_name)
+            agent_name = _agent_for_tool(registry_name)
             history_entry = {
-                "tool": tool_name,
+                "tool": registry_name,
+                "model_tool": model_tool_name,
                 "arguments": arguments,
                 "agent": agent_name,
             }
 
             try:
-                if tool_name.startswith("github."):
+                if registry_name.startswith("github."):
                     agent = GitHubAgent()
-                elif tool_name.startswith("os."):
+                elif registry_name.startswith("os."):
                     agent = OSAgent()
                 else:
                     agent = ResearchAgent()
 
                 await agent.create()
-                await agent.start(f"Executing {tool_name}")
+                await agent.start(f"Executing {registry_name}")
                 result = await tool_executor.execute(
-                    tool_name=tool_name,
+                    tool_name=registry_name,
                     arguments=arguments,
                     agent=agent_name,
                 )
-                await agent.complete(f"Completed {tool_name}")
+                await agent.complete(f"Completed {registry_name}")
 
                 history_entry["result"] = result
                 history.append(history_entry)
