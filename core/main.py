@@ -1,3 +1,5 @@
+import re
+
 from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
@@ -37,6 +39,14 @@ class ChatRequest(BaseModel):
 
 class RepositoryContextRequest(BaseModel):
     repository: str | None = None
+
+
+def _explicit_repository_from_message(message: str) -> str | None:
+    """Extract an explicit owner/repository target from the current message."""
+    match = re.search(r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b", message or "")
+    if not match:
+        return None
+    return match.group(1).removesuffix(".git")
 
 
 @app.on_event("startup")
@@ -151,11 +161,20 @@ async def github_diagnostic(test_id: str, repository: str | None = None):
 async def chat(request: ChatRequest):
     try:
         await refresh_connection_if_needed()
-        repository = request.repository.strip() if request.repository else get_active_repository()
+
+        # Current-request repository priority:
+        # 1. Explicit owner/repository written in the message.
+        # 2. Repository explicitly supplied by the UI.
+        # 3. Persisted active repository.
+        # An explicit target in the current message must never be replaced by stale context.
+        explicit_repository = _explicit_repository_from_message(request.message)
+        repository = explicit_repository or (request.repository.strip() if request.repository else None) or get_active_repository()
+
         if repository:
             from tools.github.repository_agent import _resolve_repository
             repository = await _resolve_repository(repository)
             set_active_repository(repository)
+
         response = await ask_friday(request.message, repository=repository)
         return {"response": response, "repository": repository}
     except Exception as error:
