@@ -1,5 +1,15 @@
-from core.memory.context import _is_friday_project_explain_request, _is_repo_structure_request, resolve_request
-from core.orchestrator import _extract_github_repository_name, _is_github_repository_explain_request, _is_github_repository_list_request, is_tool_required
+from core.memory.context import (
+    _is_friday_project_explain_request,
+    _is_repo_explanation_request,
+    _is_repo_structure_request,
+    resolve_request,
+)
+from core.orchestrator import (
+    _extract_github_repository_name,
+    _is_github_repository_explain_request,
+    _is_github_repository_list_request,
+    is_tool_required,
+)
 
 
 def test_general_question_stays_conversational():
@@ -61,3 +71,7 @@ def test_repository_specific_explanation_is_not_repository_listing():
     request = "explain tirth1207/friday repository"
     assert _is_github_repository_explain_request(request) is True
     assert _is_github_repository_list_request(request) is False
+
+
+def test_github_followup_project_explanation_is_detected():
+    assert _is_repo_explanation_request("explain the ai_test project", "github") is True
