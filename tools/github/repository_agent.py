@@ -85,8 +85,7 @@ async def _request(path: str, params: dict[str, Any] | None = None) -> Any:
                 detail = response.text[:300]
             if response.status_code in {401, 403} and not settings.pat.strip():
                 raise RuntimeError(
-                    f"GitHub API {response.status_code}: {detail}. "
-                    "This repository or endpoint requires GITHUB_PAT."
+                    f"GitHub API {response.status_code}: {detail}. This repository or endpoint requires GITHUB_PAT."
                 )
             raise RuntimeError(f"GitHub API {response.status_code}: {detail}")
         return response.json()
@@ -107,11 +106,7 @@ def _repo_parts(value: str) -> tuple[str | None, str]:
 
 
 async def _accessible_repositories(limit: int = 100) -> list[dict[str, Any]]:
-    """Return repositories visible to the configured GitHub account.
-
-    /user/repos is intentionally preferred over search for authenticated repository
-    resolution because it includes private repositories the token can access.
-    """
+    """Return repositories visible to the configured GitHub account."""
     if not settings.pat.strip():
         return []
 
@@ -137,70 +132,81 @@ async def _accessible_repositories(limit: int = 100) -> list[dict[str, Any]]:
     return repositories
 
 
-def _repository_name_candidates(name: str) -> list[str]:
-    """Generate stable normalized forms for natural-language repository matching."""
+def _repository_name_candidates(name: str) -> tuple[str, str]:
     raw = name.strip().removesuffix(".git")
     normalized = raw.casefold()
     collapsed = "".join(char for char in normalized if char.isalnum())
-    return [normalized, collapsed]
+    return normalized, collapsed
+
+
+def _match_repositories(items: list[dict[str, Any]], requested_name: str) -> list[dict[str, Any]]:
+    normalized, collapsed = _repository_name_candidates(requested_name)
+    exact = [
+        item for item in items
+        if str(item.get("name") or "").casefold() == normalized
+    ]
+    if exact:
+        return exact
+    if collapsed:
+        return [
+            item for item in items
+            if "".join(char for char in str(item.get("name") or "").casefold() if char.isalnum()) == collapsed
+        ]
+    return []
 
 
 def _match_repository(items: list[dict[str, Any]], requested_name: str) -> dict[str, Any] | None:
-    """Match a repository name without depending on its exact capitalization."""
-    requested_forms = _repository_name_candidates(requested_name)
-
-    # Exact repository-name match, case-insensitive, always wins.
-    for item in items:
-        repo_name = str(item.get("name") or "")
-        if repo_name.casefold() == requested_forms[0]:
-            return item
-
-    # Then tolerate harmless punctuation/case differences in natural language.
-    requested_collapsed = requested_forms[1]
-    if requested_collapsed:
-        for item in items:
-            repo_name = str(item.get("name") or "")
-            candidate = "".join(char for char in repo_name.casefold() if char.isalnum())
-            if candidate == requested_collapsed:
-                return item
-    return None
+    """Backward-compatible first-match helper used by unit tests and callers."""
+    matches = _match_repositories(items, requested_name)
+    return matches[0] if matches else None
 
 
 async def _resolve_repository(value: str) -> str:
     owner, name = _repo_parts(value)
 
-    # Fully qualified repositories are authoritative. This preserves support for
-    # repositories outside the configured user's account when the PAT can access them.
+    # A fully qualified owner/name is authoritative.
+    if owner and ("/" in value or value.strip().startswith(("https://github.com/", "http://github.com/"))):
+        data = await _request(f"/repos/{owner}/{name}")
+        return str(data.get("full_name") or f"{owner}/{name}")
+
+    # One-part natural names must be resolved from repositories the authenticated
+    # account can actually access. This avoids case-sensitive /repos/{owner}/{name}
+    # misses such as "orbit" -> "Orbit", and also supports private repositories.
+    accessible = await _accessible_repositories()
+    matches = _match_repositories(accessible, name)
+    if len(matches) == 1:
+        return str(matches[0].get("full_name"))
+    if len(matches) > 1:
+        candidates = ", ".join(str(item.get("full_name")) for item in matches[:5])
+        raise RuntimeError(f"Ambiguous GitHub repository name '{name}'. Candidates: {candidates}")
+
+    # If a configured username exists, try an exact public/private lookup only as
+    # a fallback. GitHub normally accepts the canonical case here when supplied.
     if owner:
         try:
             data = await _request(f"/repos/{owner}/{name}")
             return str(data.get("full_name") or f"{owner}/{name}")
         except RuntimeError as error:
-            # For a one-part name that was expanded using GITHUB_USERNAME, do not
-            # immediately fail: the repository may differ only by case or be a
-            # collaborator/organization repository. Resolve it from /user/repos.
-            if owner != settings.username.strip() or "404" not in str(error):
+            if "404" not in str(error):
                 raise
 
-    # Natural-language repository names should resolve against repositories the
-    # authenticated account can actually access. This is what makes names such as
-    # "minor_project-TPO", "orbit", and "ai_test" reliable, including private repos.
-    accessible = await _accessible_repositories()
-    match = _match_repository(accessible, name)
-    if match:
-        return str(match.get("full_name"))
-
-    # Public fallback: this still works when no PAT is configured.
-    data = await _request(
-        "/search/repositories",
-        {"q": f"{name} in:name", "per_page": 10},
-    )
+    # Public fallback when an authenticated index is unavailable or has no match.
+    try:
+        data = await _request("/search/repositories", {"q": f"{name} in:name", "per_page": 10})
+    except RuntimeError as error:
+        raise RuntimeError(
+            f"Could not resolve GitHub repository '{name}'. "
+            "The authenticated repository index had no match and public GitHub search failed: "
+            f"{error}"
+        ) from error
     items = data.get("items") or []
-    exact = _match_repository(items, name)
-    chosen = exact or (items[0] if items else None)
-    if not chosen:
-        raise RuntimeError(f"Could not resolve GitHub repository: {name}")
-    return str(chosen.get("full_name"))
+    matches = _match_repositories(items, name)
+    if len(matches) == 1:
+        return str(matches[0].get("full_name"))
+    if len(matches) > 1:
+        candidates = ", ".join(str(item.get("full_name")) for item in matches[:5])
+        raise RuntimeError(f"Ambiguous GitHub repository name '{name}'. Candidates: {candidates}")
+    raise RuntimeError(f"Could not resolve GitHub repository: {name}")
 
 
 def _score_path(path: str) -> int:
