@@ -9,6 +9,7 @@ from core.github_oauth import (
     clear_connection,
     connection_status,
     exchange_code,
+    refresh_connection_if_needed,
     settings as github_oauth_settings,
 )
 from core.orchestrator_structured import ask_friday
@@ -32,7 +33,7 @@ class ChatRequest(BaseModel):
 
 @app.on_event("startup")
 async def startup() -> None:
-    if apply_connection_to_github_tools():
+    if await refresh_connection_if_needed():
         print("[FRIDAY GitHub] Restored GitHub App user connection")
 
 
@@ -86,6 +87,7 @@ async def github_auth_disconnect():
 @app.post("/chat")
 async def chat(request: ChatRequest):
     try:
+        await refresh_connection_if_needed()
         response = await ask_friday(request.message)
         return {"response": response}
     except Exception as error:
