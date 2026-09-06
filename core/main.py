@@ -16,7 +16,7 @@ from core.memory import memory_store
 from core.orchestrator_structured import ask_friday
 from services.api.websocket import friday_websocket
 
-app = FastAPI(title="FRIDAY", description="Personal AI Operating Layer", version="0.2.0")
+app = FastAPI(title="FRIDAY", description="Personal AI Operating Layer", version="0.3.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173"],
@@ -169,7 +169,6 @@ async def chat(request: ChatRequest):
 
         if _is_explicit_build_request(request.message):
             from core.agents.developer_loop import DeveloperLoop
-            await memory_store.add_message("user", request.message) if False else None
             result = await DeveloperLoop(max_iterations=4, allow_mutations=True).run(request.message, repository)
             response = (
                 "## Developer Agent\n\n"
