@@ -1,13 +1,4 @@
-"""Deterministic GitHub repository analysis workflow.
-
-The repository agent is deliberately deterministic: it resolves the repository, fetches
-metadata and the complete Git tree, then selects useful documentation/configuration/
-entry-point files. It does not depend on an LLM successfully choosing tool calls.
-
-Authenticated requests use FRIDAY's GitHub PAT when available, so private repositories
-owned by or accessible to the configured account work. Public repositories are also
-supported without a PAT through GitHub's public REST endpoints.
-"""
+"""Deterministic GitHub repository analysis workflow."""
 
 from __future__ import annotations
 
@@ -23,6 +14,7 @@ GITHUB_API = "https://api.github.com"
 GITHUB_API_VERSION = "2022-11-28"
 MAX_FILE_CHARS = 150_000
 MAX_TREE_ITEMS = 20_000
+MAX_REPOSITORY_PAGES = 5
 
 
 class GitHubAgentSettings(BaseSettings):
@@ -114,21 +106,97 @@ def _repo_parts(value: str) -> tuple[str | None, str]:
     raise ValueError(f"Invalid GitHub repository: {value}")
 
 
+async def _accessible_repositories(limit: int = 100) -> list[dict[str, Any]]:
+    """Return repositories visible to the configured GitHub account.
+
+    /user/repos is intentionally preferred over search for authenticated repository
+    resolution because it includes private repositories the token can access.
+    """
+    if not settings.pat.strip():
+        return []
+
+    repositories: list[dict[str, Any]] = []
+    per_page = max(1, min(limit, 100))
+    for page in range(1, MAX_REPOSITORY_PAGES + 1):
+        data = await _request(
+            "/user/repos",
+            {
+                "visibility": "all",
+                "affiliation": "owner,collaborator,organization_member",
+                "sort": "pushed",
+                "direction": "desc",
+                "per_page": per_page,
+                "page": page,
+            },
+        )
+        if not isinstance(data, list):
+            break
+        repositories.extend(data)
+        if len(data) < per_page:
+            break
+    return repositories
+
+
+def _repository_name_candidates(name: str) -> list[str]:
+    """Generate stable normalized forms for natural-language repository matching."""
+    raw = name.strip().removesuffix(".git")
+    normalized = raw.casefold()
+    collapsed = "".join(char for char in normalized if char.isalnum())
+    return [normalized, collapsed]
+
+
+def _match_repository(items: list[dict[str, Any]], requested_name: str) -> dict[str, Any] | None:
+    """Match a repository name without depending on its exact capitalization."""
+    requested_forms = _repository_name_candidates(requested_name)
+
+    # Exact repository-name match, case-insensitive, always wins.
+    for item in items:
+        repo_name = str(item.get("name") or "")
+        if repo_name.casefold() == requested_forms[0]:
+            return item
+
+    # Then tolerate harmless punctuation/case differences in natural language.
+    requested_collapsed = requested_forms[1]
+    if requested_collapsed:
+        for item in items:
+            repo_name = str(item.get("name") or "")
+            candidate = "".join(char for char in repo_name.casefold() if char.isalnum())
+            if candidate == requested_collapsed:
+                return item
+    return None
+
+
 async def _resolve_repository(value: str) -> str:
     owner, name = _repo_parts(value)
+
+    # Fully qualified repositories are authoritative. This preserves support for
+    # repositories outside the configured user's account when the PAT can access them.
     if owner:
         try:
             data = await _request(f"/repos/{owner}/{name}")
             return str(data.get("full_name") or f"{owner}/{name}")
         except RuntimeError as error:
-            # A one-part name is a convenience form for the user's own repo, but it
-            # must still be able to resolve a public repository with the same name.
+            # For a one-part name that was expanded using GITHUB_USERNAME, do not
+            # immediately fail: the repository may differ only by case or be a
+            # collaborator/organization repository. Resolve it from /user/repos.
             if owner != settings.username.strip() or "404" not in str(error):
                 raise
 
-    data = await _request("/search/repositories", {"q": f"{name} in:name", "per_page": 10})
+    # Natural-language repository names should resolve against repositories the
+    # authenticated account can actually access. This is what makes names such as
+    # "minor_project-TPO", "orbit", and "ai_test" reliable, including private repos.
+    accessible = await _accessible_repositories()
+    match = _match_repository(accessible, name)
+    if match:
+        return str(match.get("full_name"))
+
+    # Public fallback: this still works when no PAT is configured.
+    data = await _request(
+        "/search/repositories",
+        {"q": f"{name} in:name", "per_page": 10},
+    )
     items = data.get("items") or []
-    exact = next((item for item in items if str(item.get("name", "")).lower() == name.lower()), None)
+    exact = _match_repository(items, name)
     chosen = exact or (items[0] if items else None)
     if not chosen:
         raise RuntimeError(f"Could not resolve GitHub repository: {name}")
@@ -259,6 +327,7 @@ async def github_analyze_repository(repository: str, ref: str | None = None, max
         "access": "private-authenticated" if metadata.get("private") else "public",
         "analysis_notes": [
             "Repository identity was resolved from GitHub.",
+            "Natural-language names are matched against repositories accessible to the authenticated account before public search fallback.",
             "The Git tree was requested recursively; very large repositories may return a partial tree.",
             "Files were prioritized by documentation, configuration, architecture, and application entry-point relevance.",
             "Use github.file.read or github.code.search for deeper targeted inspection after this dossier.",
