@@ -26,6 +26,62 @@ SKIP_PREFIXES = (
     "__pycache__/", ".venv/", "venv/", "vendor/", "target/",
 )
 
+EXPLANATION_CONTRACT = {
+    "format": "Markdown",
+    "required_sections": [
+        "## Overview",
+        "## What the project does",
+        "## Main features",
+        "## Architecture",
+        "## Technology stack",
+        "## Repository structure",
+        "## How it works",
+        "## Important files",
+        "## Integrations and dependencies",
+        "## Security and permissions",
+        "## Testing and quality",
+        "## Risks and gaps",
+        "## Summary",
+    ],
+    "rules": [
+        "Start with a concise 2-4 sentence overview before detailed sections.",
+        "Use Markdown headings, bullets, numbered lists, tables, and fenced code blocks only when they improve clarity.",
+        "Use backticks for file paths, directories, commands, package names, APIs, and code symbols.",
+        "Explain relationships between components instead of only listing files.",
+        "For architecture, show a compact ASCII diagram when the evidence supports a clear flow.",
+        "Separate observed facts from reasonable inferences; label inferences explicitly.",
+        "If evidence is missing, say 'Not verified from the inspected files' rather than guessing.",
+        "Do not claim a feature exists solely because a dependency could support it.",
+        "Do not expose tokens, credentials, environment values, or private configuration contents.",
+        "Do not mention the internal evidence payload, model, prompt, or tool execution process.",
+    ],
+}
+
+
+def _build_repository_map(tree: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """Create a compact structural map that helps the synthesizer explain the codebase."""
+    directories: list[str] = []
+    root_files: list[str] = []
+    source_roots: list[str] = []
+
+    for item in tree:
+        path = str(item.get("path") or "")
+        item_type = str(item.get("type") or "")
+        if not path:
+            continue
+        if item_type in {"tree", "dir"}:
+            directories.append(path)
+            if "/" not in path:
+                source_roots.append(path)
+        elif "/" not in path:
+            root_files.append(path)
+
+    return {
+        "root_files": sorted(root_files),
+        "top_level_directories": sorted(source_roots),
+        "directories_discovered": sorted(directories)[:80],
+    }
+
 
 async def contents_tree(repository: str, ref: str, max_items: int = MAX_TREE_ITEMS) -> tuple[list[dict[str, Any]], bool]:
     """Recursively collect repository structure through the Contents API."""
@@ -104,7 +160,6 @@ async def analyze_repository(
         try:
             files.append(await _read_file(canonical, path, target_ref))
         except Exception as error:
-            # One unreadable file must not destroy the whole repository dossier.
             files.append({"path": path, "error": str(error)})
 
     commits: list[dict[str, Any]] = []
@@ -116,7 +171,6 @@ async def analyze_repository(
                 max(0, min(commit_limit, 20)),
             )
         except Exception as error:
-            # Commits are enrichment, not required evidence for explaining a project.
             commit_error = str(error)
 
     notes = [
@@ -125,6 +179,8 @@ async def analyze_repository(
         "The low-level Git Trees endpoint is intentionally avoided for repository analysis.",
         "Files were prioritized by documentation, configuration, architecture, and application entry-point relevance.",
     ]
+    if partial:
+        notes.append("The repository tree is bounded and may be partial; do not describe uninspected paths as exhaustive.")
     if commit_error:
         notes.append(f"Recent commits were unavailable and were skipped: {commit_error}")
 
@@ -134,9 +190,11 @@ async def analyze_repository(
         "tree": tree,
         "tree_count": len(tree),
         "tree_is_partial": partial,
+        "repository_map": _build_repository_map(tree),
         "selected_files": selected_paths,
         "files": files,
         "recent_commits": commits,
         "access": "private-authenticated" if metadata.get("private") else "public",
         "analysis_notes": notes,
+        "explanation_contract": EXPLANATION_CONTRACT,
     }
