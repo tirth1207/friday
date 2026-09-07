@@ -33,50 +33,28 @@ FRIDAY's OSIRIS integration is now a broader read-only live-intelligence layer d
 
 ### Intelligence router
 
-`osiris.intelligence_brief` is the multi-feed orchestration layer. It selects a bounded set of sources from the user's topic and fetches them concurrently.
+`osiris.intelligence_brief` selects a bounded set of sources from the user's topic and fetches them concurrently. It supports news, weather, war/conflict, geopolitics, satellites/space, aviation, earthquakes, wildfire, markets, crypto, cyber, maritime, infrastructure, and global situations. Token-aware matching reduces accidental substring routing; unknown topics safely fall back to news.
 
-Examples:
+### Git-aware engineering loop
 
-- news → news + live news
-- weather → weather + air quality + radar
-- war/conflict → conflicts + frontlines + GDELT + news
-- geopolitics → conflicts + country risk + GDELT + news
-- satellite/space → satellites + space weather
-- aviation → flights + weather
-- earthquake → earthquakes + GDELT
-- wildfire → fires + weather
-- markets → markets + news
-- crypto → crypto + news
-- cyber → cyber threats + cyber attacks + news
-- maritime → maritime + news
-- global/world → GDELT + news + conflicts + weather
+FRIDAY now has explicit permission-gated Git mutation tools:
 
-The router now uses token-aware matching instead of loose substring matching, reducing accidental tool selection for unrelated words. Unknown topics safely fall back to news rather than generating arbitrary external requests.
+- `git.add` — stage only explicitly selected paths.
+- `git.commit` — create a bounded conventional commit message.
+- `git.push` — push a configured remote/ref without force-push support.
 
-### Tool-routing behavior
-
-FRIDAY has two intelligence modes:
-
-1. **Narrow request:** call the specific `osiris.*` tool that answers it.
-2. **Broad situation request:** call `osiris.intelligence_brief`, which selects and gathers a bounded multi-feed snapshot.
+The Developer Agent is taught to use these only after implementation and concrete verification succeed. It must not force-push, rewrite history, stage secrets/generated junk, or commit an empty change set. Pull-request creation and merging remain separate GitHub operations.
 
 ### Safety / trust behavior
 
 - OSIRIS access is read-only in FRIDAY.
-- The client uses an allow-list of read endpoints rather than arbitrary URLs.
+- The OSIRIS client uses an allow-list of read endpoints rather than arbitrary URLs.
 - Requests have a bounded timeout and response-size limit.
 - No OSIRIS API key is committed or required for the public read endpoints currently documented by OSIRIS.
 - Upstream machine-assessment/risk fields are treated as source metadata, not independently verified forecasts.
 - Each result carries source and endpoint context so FRIDAY can distinguish live source data from its own interpretation.
 - Active scanning/recon capabilities are intentionally not exposed through the FRIDAY OSIRIS tool registry.
-
-## Repository workflow note
-
-FRIDAY currently exposes read-only Git inspection tools (`git.status`, `git.diff`, `git.log`, `git.branch`) plus a permission-gated GitHub API tool. This document does not claim dedicated `git.add`, `git.commit`, or `git.push` tools because those are not currently implemented in the tool registry.
-
-## Dependency impact
-
-No new Python dependency was required; FRIDAY already includes `aiohttp`.
+- Git mutation tools are still executor permission-gated even when the Developer Agent is operating autonomously.
 
 ## Architecture
 
@@ -84,22 +62,22 @@ No new Python dependency was required; FRIDAY already includes `aiohttp`.
 User request
     │
     ▼
-FRIDAY model
+FRIDAY supervisor
     │
-    ├── narrow intent ──────► specific osiris.* tool
+    ├── narrow live-data intent ──► specific osiris.* tool
     │
-    └── broad situation ────► osiris.intelligence_brief
-                                  │
-                         ┌────────┼─────────┐
-                         ▼        ▼         ▼
-                       news    conflicts  weather
-                         │        │         │
-                         └────────┼─────────┘
-                                  ▼
-                         source-aware snapshot
-                                  │
-                                  ▼
-                         FRIDAY final answer
+    ├── broad situation ──────────► intelligence_brief
+    │
+    └── engineering goal ────────► Developer Agent
+                                      │
+                               inspect → implement
+                                      │
+                                verify → repair
+                                      │
+                              git.add → commit → push
+                                      │
+                                      ▼
+                              feature branch / PR
 ```
 
 ## Verification status
