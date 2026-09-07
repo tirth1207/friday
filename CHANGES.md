@@ -40,21 +40,20 @@ FRIDAY's OSIRIS integration is now a broader read-only live-intelligence layer d
 FRIDAY now has explicit permission-gated Git mutation tools:
 
 - `git.add` — stage only explicitly selected paths.
-- `git.commit` — create a bounded conventional commit message.
+- `git.commit` — create a bounded commit message.
 - `git.push` — push a configured remote/ref without force-push support.
 
-The Developer Agent is taught to use these only after implementation and concrete verification succeed. It must not force-push, rewrite history, stage secrets/generated junk, or commit an empty change set. Pull-request creation and merging remain separate GitHub operations.
+The Developer Agent is taught to use these only after implementation and concrete verification succeeds. It must not force-push, rewrite history, stage secrets/generated junk, or commit an empty change set. Pull-request creation and merging remain separate GitHub operations.
 
 ### Safety / trust behavior
 
 - OSIRIS access is read-only in FRIDAY.
 - The OSIRIS client uses an allow-list of read endpoints rather than arbitrary URLs.
 - Requests have a bounded timeout and response-size limit.
-- No OSIRIS API key is committed or required for the public read endpoints currently documented by OSIRIS.
 - Upstream machine-assessment/risk fields are treated as source metadata, not independently verified forecasts.
 - Each result carries source and endpoint context so FRIDAY can distinguish live source data from its own interpretation.
 - Active scanning/recon capabilities are intentionally not exposed through the FRIDAY OSIRIS tool registry.
-- Git mutation tools are still executor permission-gated even when the Developer Agent is operating autonomously.
+- Git mutation tools remain executor permission-gated even when the Developer Agent operates autonomously.
 
 ## Architecture
 
