@@ -6,30 +6,16 @@ FRIDAY's OSIRIS integration is now a broader read-only live-intelligence layer d
 
 ### Live intelligence capabilities
 
-- `osiris.news` — aggregated news.
-- `osiris.live_news` — live-news feed.
-- `osiris.weather` — severe weather / natural events.
-- `osiris.air_quality` — air-quality observations.
-- `osiris.radar` — radar/weather metadata.
-- `osiris.conflicts` — active conflicts and incidents.
-- `osiris.frontlines` — conflict-frontline data.
-- `osiris.satellites` — tracked orbital objects.
-- `osiris.flights` — live aircraft / ADS-B data.
-- `osiris.earthquakes` — recent seismic events.
-- `osiris.fires` — active wildfire hotspots.
-- `osiris.space_weather` — solar and geomagnetic conditions.
-- `osiris.gdelt` — geocoded world events.
-- `osiris.country_risk` — country-level risk data.
-- `osiris.markets` — defence-sector equities / commodities.
-- `osiris.crypto` — cryptocurrency market data.
-- `osiris.maritime` — maritime / vessel intelligence.
-- `osiris.infrastructure` — infrastructure intelligence.
-- `osiris.cyber_threats` — cyber-threat intelligence.
-- `osiris.cyber_attacks` — reported cyber-attack data.
-- `osiris.region_dossier` — composite location intelligence.
-- `osiris.stats` — lightweight feed counters.
-- `osiris.health` — API reachability check.
-- `osiris.intelligence` — bounded generic access to an allow-listed read endpoint.
+- `osiris.news`, `osiris.live_news`
+- `osiris.weather`, `osiris.air_quality`, `osiris.radar`
+- `osiris.conflicts`, `osiris.frontlines`
+- `osiris.satellites`, `osiris.flights`
+- `osiris.earthquakes`, `osiris.fires`, `osiris.space_weather`
+- `osiris.gdelt`, `osiris.country_risk`, `osiris.region_dossier`
+- `osiris.markets`, `osiris.crypto`
+- `osiris.maritime`, `osiris.infrastructure`
+- `osiris.cyber_threats`, `osiris.cyber_attacks`
+- `osiris.stats`, `osiris.health`, `osiris.intelligence`
 
 ### Intelligence router
 
@@ -43,17 +29,16 @@ FRIDAY now has explicit permission-gated Git mutation tools:
 - `git.commit` — create a bounded commit message.
 - `git.push` — push a configured remote/ref without force-push support.
 
-The Developer Agent is taught to use these only after implementation and concrete verification succeeds. It must not force-push, rewrite history, stage secrets/generated junk, or commit an empty change set. Pull-request creation and merging remain separate GitHub operations.
+The Developer Agent is taught to use these after implementation and concrete verification succeeds. It must not force-push, rewrite history, stage secrets/generated junk, or commit an empty change set. Pull-request creation and merging remain separate GitHub operations.
 
 ### Safety / trust behavior
 
-- OSIRIS access is read-only in FRIDAY.
-- The OSIRIS client uses an allow-list of read endpoints rather than arbitrary URLs.
-- Requests have a bounded timeout and response-size limit.
-- Upstream machine-assessment/risk fields are treated as source metadata, not independently verified forecasts.
-- Each result carries source and endpoint context so FRIDAY can distinguish live source data from its own interpretation.
-- Active scanning/recon capabilities are intentionally not exposed through the FRIDAY OSIRIS tool registry.
-- Git mutation tools remain executor permission-gated even when the Developer Agent operates autonomously.
+- OSIRIS access is read-only and allow-listed.
+- Network requests have bounded timeout and response-size limits.
+- Upstream machine-assessment/risk fields are treated as source metadata, not verified forecasts.
+- Source/endpoint context is retained for live-data responses.
+- Active scanning/recon capabilities are intentionally not exposed through the OSIRIS registry.
+- Git mutation tools remain executor permission-gated.
 
 ## Architecture
 
@@ -64,9 +49,7 @@ User request
 FRIDAY supervisor
     │
     ├── narrow live-data intent ──► specific osiris.* tool
-    │
     ├── broad situation ──────────► intelligence_brief
-    │
     └── engineering goal ────────► Developer Agent
                                       │
                                inspect → implement
