@@ -1,8 +1,8 @@
 """Read-only OSIRIS intelligence tools for FRIDAY.
 
 OSIRIS exposes public, keyless GET endpoints. These wrappers deliberately keep
-network access bounded to the OSIRIS host and return source/timestamp metadata
-alongside the upstream JSON so the model can distinguish data from inference.
+network access bounded to the OSIRIS host and return source/endpoint metadata
+alongside upstream JSON so the model can distinguish observations from inference.
 """
 
 from __future__ import annotations
@@ -96,13 +96,7 @@ async def osiris_intelligence(
     longitude: float | None = None,
     radius_km: float | None = None,
 ) -> dict[str, Any]:
-    """Call one allow-listed OSIRIS read endpoint for live intelligence data.
-
-    Use endpoint names such as news, weather, conflicts, satellites, flights,
-    earthquakes, fires, space_weather, gdelt, country_risk, markets, or stats.
-    Query/location parameters are optional because OSIRIS routes vary in their
-    supported filters; unsupported parameters are avoided by default.
-    """
+    """Call one allow-listed OSIRIS read endpoint for live intelligence data."""
     params: dict[str, Any] = {}
     if query:
         params["q"] = query
@@ -130,14 +124,34 @@ async def osiris_news(query: str = "") -> dict[str, Any]:
     return await _request("news", {"q": query} if query else None)
 
 
+async def osiris_live_news(query: str = "") -> dict[str, Any]:
+    """Fetch the OSIRIS live-news feed."""
+    return await _request("live_news", {"q": query} if query else None)
+
+
 async def osiris_weather() -> dict[str, Any]:
     """Fetch current severe-weather/natural-event data from OSIRIS."""
     return await _request("weather")
 
 
+async def osiris_air_quality() -> dict[str, Any]:
+    """Fetch air-quality observations from OSIRIS."""
+    return await _request("air_quality")
+
+
+async def osiris_radar() -> dict[str, Any]:
+    """Fetch radar/weather imagery metadata from OSIRIS."""
+    return await _request("radar")
+
+
 async def osiris_conflicts() -> dict[str, Any]:
     """Fetch active conflict zones and incident data from OSIRIS."""
     return await _request("conflicts")
+
+
+async def osiris_frontlines() -> dict[str, Any]:
+    """Fetch conflict-frontline data from OSIRIS."""
+    return await _request("frontlines")
 
 
 async def osiris_satellites() -> dict[str, Any]:
@@ -180,9 +194,31 @@ async def osiris_markets() -> dict[str, Any]:
     return await _request("markets")
 
 
-async def osiris_region_dossier(
-    latitude: float,
-    longitude: float,
-) -> dict[str, Any]:
+async def osiris_crypto() -> dict[str, Any]:
+    """Fetch cryptocurrency market data from OSIRIS."""
+    return await _request("crypto")
+
+
+async def osiris_maritime() -> dict[str, Any]:
+    """Fetch maritime/vessel intelligence data from OSIRIS."""
+    return await _request("maritime")
+
+
+async def osiris_infrastructure() -> dict[str, Any]:
+    """Fetch infrastructure intelligence data from OSIRIS."""
+    return await _request("infrastructure")
+
+
+async def osiris_cyber_threats() -> dict[str, Any]:
+    """Fetch cyber-threat intelligence from OSIRIS."""
+    return await _request("cyber_threats")
+
+
+async def osiris_cyber_attacks() -> dict[str, Any]:
+    """Fetch reported cyber-attack data from OSIRIS."""
+    return await _request("cyber_attacks")
+
+
+async def osiris_region_dossier(latitude: float, longitude: float) -> dict[str, Any]:
     """Fetch a composite OSIRIS intelligence summary around a map location."""
     return await _request("region_dossier", {"lat": latitude, "lon": longitude})
