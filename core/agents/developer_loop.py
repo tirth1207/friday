@@ -18,7 +18,9 @@ Run appropriate project tests/build/lint after changes. Repair failures within t
 Never expose private reasoning. Return only the final engineering summary.
 All mutations use FRIDAY's permission-gated executor. Never call developer.run recursively.
 Provider-safe names containing `__` map to dotted registry names, e.g. `github__analyze` -> `github.analyze`.
-Verification requires concrete successful tool evidence; model wording alone is never verification."""
+Verification requires concrete successful tool evidence; model wording alone is never verification.
+
+OSIRIS intelligence tools are read-only live-data sources. When the engineering task needs current situational data, use the narrowest relevant `osiris.*` tool rather than web-searching or inventing data. Examples: osiris.news for current news, osiris.weather for severe weather, osiris.conflicts for active conflicts, osiris.satellites for orbital objects, osiris.flights for aircraft, osiris.earthquakes for seismic activity, osiris.fires for wildfires, osiris.space_weather for solar/geomagnetic conditions, osiris.gdelt for geocoded world events, osiris.country_risk for country risk data, osiris.markets for defence-sector markets, and osiris.region_dossier for a composite location brief. Prefer one focused OSIRIS call when it answers the request; compose multiple calls only when the user explicitly needs a cross-domain brief. Treat upstream machine-assessment/risk fields as source metadata, not independently verified forecasts. Include the OSIRIS endpoint and timestamp/source context when reporting live data."""
 
 class DeveloperLoop:
     def __init__(self, max_iterations: int = 4, allow_mutations: bool = False):
