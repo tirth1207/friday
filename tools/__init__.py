@@ -30,6 +30,7 @@ from tools.osiris.osiris_tools import (
     osiris_space_weather, osiris_gdelt, osiris_country_risk, osiris_markets,
     osiris_region_dossier,
 )
+from tools.osiris.intelligence_router import osiris_intelligence_brief
 
 
 async def developer_run(goal: str, repository: str | None = None, max_iterations: int = 4):
@@ -69,6 +70,7 @@ def register_all_tools():
     tool_registry.register(name="osiris.health", func=osiris_health, description="Check whether the public OSIRIS Intelligence API is reachable.", permission=PermissionLevel.SAFE)
     tool_registry.register(name="osiris.stats", func=osiris_stats, description="Fetch lightweight aggregate OSIRIS intelligence feed counters.", permission=PermissionLevel.SAFE)
     tool_registry.register(name="osiris.intelligence", func=osiris_intelligence, description="Call one allow-listed read-only OSIRIS intelligence endpoint. Use for live news, weather, conflicts, satellites, flights, earthquakes, fires, space weather, GDELT, country risk, markets, or similar situational data.", permission=PermissionLevel.SAFE, parameters={"endpoint": "string", "query": "string", "latitude": "number", "longitude": "number", "radius_km": "number"})
+    tool_registry.register(name="osiris.intelligence_brief", func=osiris_intelligence_brief, description="Build a bounded multi-feed OSIRIS snapshot from user intent. Use for broad situational questions; use a specific osiris.* tool for narrow requests.", permission=PermissionLevel.SAFE, parameters={"topic": "string", "query": "string", "latitude": "number", "longitude": "number", "max_sources": "number"})
     tool_registry.register(name="osiris.news", func=osiris_news, description="Fetch aggregated OSIRIS news. Treat machine-assessment fields as unverified metadata, not forecasts.", permission=PermissionLevel.SAFE, parameters={"query": "string"})
     tool_registry.register(name="osiris.weather", func=osiris_weather, description="Fetch OSIRIS severe-weather and natural-event data.", permission=PermissionLevel.SAFE)
     tool_registry.register(name="osiris.conflicts", func=osiris_conflicts, description="Fetch active conflict zones and incident data from OSIRIS.", permission=PermissionLevel.SAFE)
