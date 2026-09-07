@@ -17,11 +17,7 @@
 
 ## OSIRIS Intelligence Layer
 
-### New integration
-
-FRIDAY now has a read-only OSIRIS client under `tools/osiris/`.
-
-The integration is designed around **tool selection by user intent** instead of calling every feed for every request.
+FRIDAY now has a read-only OSIRIS client under `tools/osiris/`. OSIRIS documents 57 keyless GET endpoints across aviation, space, earth/environment, geopolitics, media/markets, infrastructure, cyber and OSINT. 
 
 ### Primary tools
 
@@ -41,63 +37,86 @@ The integration is designed around **tool selection by user intent** instead of 
 - `osiris.health` — API reachability check.
 - `osiris.intelligence` — bounded generic access to an allow-listed read endpoint.
 
+### Intelligence router
+
+Added `osiris.intelligence_brief` as the multi-feed orchestration layer.
+
+It maps broad intent to a bounded set of OSIRIS feeds and fetches them concurrently:
+
+- news → news + live news
+- weather → weather + air quality
+- war/conflict → conflicts + frontlines + GDELT + news
+- geopolitics → conflicts + country risk + GDELT + news
+- satellite/space → satellites + space weather
+- aviation → flights + weather
+- earthquake → earthquakes + GDELT
+- wildfire → fires + weather
+- markets → markets + news
+- cyber → cyber threats + cyber attacks + news
+- maritime → maritime + news
+- global/world → GDELT + news + conflicts + weather
+
+Unknown broad topics safely fall back to news rather than making arbitrary external requests.
+
 ### Tool-routing behavior
 
-FRIDAY's Developer Agent prompt now teaches the model to choose the narrowest OSIRIS capability that answers a live-data request.
+FRIDAY now has two modes:
 
-Examples:
+1. **Narrow request:** call the specific `osiris.*` tool that answers it.
+2. **Broad situation request:** call `osiris.intelligence_brief`, which selects and gathers a bounded multi-feed snapshot.
 
-- “What is the latest news?” → `osiris.news`
-- “Any major conflicts right now?” → `osiris.conflicts`
-- “What is the weather situation?” → `osiris.weather`
-- “Show satellites / aircraft” → `osiris.satellites` / `osiris.flights`
-- “What happened globally?” → `osiris.gdelt`
-- “Give me a location intelligence brief” → `osiris.region_dossier`
+Example:
 
-Multiple OSIRIS calls should only be composed when a cross-domain brief actually needs them.
+```text
+“What is the latest news?”
+    -> osiris.news
+
+“Any major conflicts right now?”
+    -> osiris.conflicts
+
+“What is happening in Europe?”
+    -> osiris.intelligence_brief(topic="Europe/global situation")
+    -> bounded multi-feed snapshot
+```
+
+The Developer Agent prompt explicitly teaches this distinction and keeps OSIRIS calls read-only. 
 
 ### Safety / trust behavior
 
 - OSIRIS access is read-only in FRIDAY.
-- The integration uses an allow-list of read endpoints rather than arbitrary URLs.
+- The client uses an allow-list of read endpoints rather than arbitrary URLs.
 - Requests have a bounded timeout and response-size limit.
 - No OSIRIS API key is committed or required for the public read endpoints currently documented by OSIRIS.
 - FRIDAY is instructed to treat upstream machine-assessment/risk fields as source metadata, not independently verified forecasts.
-- The `osiris.news` wrapper explicitly flags this trust boundary because the upstream project has a reported issue involving randomized machine-assessment probabilities.
 - Each result carries source and endpoint context so FRIDAY can distinguish live source data from its own interpretation.
 
 ### Dependency impact
 
 No new Python dependency was required; FRIDAY already includes `aiohttp`.
 
-### Main architecture
+### Architecture
 
 ```text
 User request
     │
     ▼
-FRIDAY model / tool caller
+FRIDAY model
     │
-    ├── news? ───────────────► osiris.news
-    ├── weather? ────────────► osiris.weather
-    ├── war/conflict? ───────► osiris.conflicts
-    ├── satellites? ─────────► osiris.satellites
-    ├── flights? ────────────► osiris.flights
-    ├── earthquake? ─────────► osiris.earthquakes
-    ├── wildfire? ───────────► osiris.fires
-    ├── space weather? ──────► osiris.space_weather
-    └── location brief? ─────► osiris.region_dossier
-                    │
-                    ▼
-             OSIRIS JSON feed
-                    │
-                    ▼
-        FRIDAY source-aware response
+    ├── narrow intent ──────► specific osiris.* tool
+    │
+    └── broad situation ────► osiris.intelligence_brief
+                                  │
+                       ┌──────────┼──────────┐
+                       ▼          ▼          ▼
+                     news      conflicts   weather
+                       │          │          │
+                       └──────────┼──────────┘
+                                  ▼
+                         source-aware snapshot
+                                  │
+                                  ▼
+                         FRIDAY final answer
 ```
-
-### Next expansion
-
-The next logical layer is a broader **FRIDAY intelligence router** that adds other approved information providers behind the same intent-based interface, with caching, source ranking, freshness checks, and optional multi-tool correlation for requests such as “Give me the situation in Europe right now.”
 
 ## Verification status
 
