@@ -1,123 +1,67 @@
 # FRIDAY — Changes
 
-## Git Mutation Workflow
+## Super FRIDAY Intelligence Expansion
 
-**Branch:** `feat/git-mutation-workflow`
+FRIDAY's OSIRIS integration is now a broader read-only live-intelligence layer designed for natural tool selection rather than one-off endpoint calls.
 
-### What changed
+### Live intelligence capabilities
 
-- Added explicit Git mutation capabilities for the Developer Agent:
-  - `git.add` — stage selected files.
-  - `git.commit` — create a local commit with an explicit message.
-  - `git.push` — push an approved branch/ref to its configured remote.
-- Kept mutation operations permission-gated through FRIDAY's existing executor.
-- Added the mutation tools to the Developer Agent's available tool set for the approved implementation/finalization phase.
-- Preserved the existing inspect → implement → verify workflow and its requirement for concrete verification evidence.
-- Added documentation for the intended approval boundary: code changes and verification happen first; staging, committing, and pushing remain explicit mutation operations.
-
-## OSIRIS Intelligence Layer
-
-FRIDAY now has a read-only OSIRIS client under `tools/osiris/`. OSIRIS documents 57 keyless GET endpoints across aviation, space, earth/environment, geopolitics, media/markets, infrastructure, cyber and OSINT. 
-
-### Primary tools
-
-- `osiris.news` — aggregated news.
-- `osiris.weather` — severe weather / natural events.
-- `osiris.conflicts` — active conflicts and incidents.
-- `osiris.satellites` — tracked orbital objects.
-- `osiris.flights` — live aircraft / ADS-B data.
-- `osiris.earthquakes` — recent seismic events.
-- `osiris.fires` — active wildfire hotspots.
-- `osiris.space_weather` — solar and geomagnetic conditions.
-- `osiris.gdelt` — geocoded world events.
-- `osiris.country_risk` — country-level risk data.
-- `osiris.markets` — defence-sector equities / commodities.
-- `osiris.region_dossier` — composite location intelligence.
-- `osiris.stats` — lightweight feed counters.
-- `osiris.health` — API reachability check.
-- `osiris.intelligence` — bounded generic access to an allow-listed read endpoint.
+- `osiris.news`, `osiris.live_news`
+- `osiris.weather`, `osiris.air_quality`, `osiris.radar`
+- `osiris.conflicts`, `osiris.frontlines`
+- `osiris.satellites`, `osiris.flights`
+- `osiris.earthquakes`, `osiris.fires`, `osiris.space_weather`
+- `osiris.gdelt`, `osiris.country_risk`, `osiris.region_dossier`
+- `osiris.markets`, `osiris.crypto`
+- `osiris.maritime`, `osiris.infrastructure`
+- `osiris.cyber_threats`, `osiris.cyber_attacks`
+- `osiris.stats`, `osiris.health`, `osiris.intelligence`
 
 ### Intelligence router
 
-Added `osiris.intelligence_brief` as the multi-feed orchestration layer.
+`osiris.intelligence_brief` selects a bounded set of sources from the user's topic and fetches them concurrently. It supports news, weather, war/conflict, geopolitics, satellites/space, aviation, earthquakes, wildfire, markets, crypto, cyber, maritime, infrastructure, and global situations. Token-aware matching reduces accidental substring routing; unknown topics safely fall back to news.
 
-It maps broad intent to a bounded set of OSIRIS feeds and fetches them concurrently:
+### Git-aware engineering loop
 
-- news → news + live news
-- weather → weather + air quality
-- war/conflict → conflicts + frontlines + GDELT + news
-- geopolitics → conflicts + country risk + GDELT + news
-- satellite/space → satellites + space weather
-- aviation → flights + weather
-- earthquake → earthquakes + GDELT
-- wildfire → fires + weather
-- markets → markets + news
-- cyber → cyber threats + cyber attacks + news
-- maritime → maritime + news
-- global/world → GDELT + news + conflicts + weather
+FRIDAY now has explicit permission-gated Git mutation tools:
 
-Unknown broad topics safely fall back to news rather than making arbitrary external requests.
+- `git.add` — stage only explicitly selected paths.
+- `git.commit` — create a bounded commit message.
+- `git.push` — push a configured remote/ref without force-push support.
 
-### Tool-routing behavior
-
-FRIDAY now has two modes:
-
-1. **Narrow request:** call the specific `osiris.*` tool that answers it.
-2. **Broad situation request:** call `osiris.intelligence_brief`, which selects and gathers a bounded multi-feed snapshot.
-
-Example:
-
-```text
-“What is the latest news?”
-    -> osiris.news
-
-“Any major conflicts right now?”
-    -> osiris.conflicts
-
-“What is happening in Europe?”
-    -> osiris.intelligence_brief(topic="Europe/global situation")
-    -> bounded multi-feed snapshot
-```
-
-The Developer Agent prompt explicitly teaches this distinction and keeps OSIRIS calls read-only. 
+The Developer Agent is taught to use these after implementation and concrete verification succeeds. It must not force-push, rewrite history, stage secrets/generated junk, or commit an empty change set. Pull-request creation and merging remain separate GitHub operations.
 
 ### Safety / trust behavior
 
-- OSIRIS access is read-only in FRIDAY.
-- The client uses an allow-list of read endpoints rather than arbitrary URLs.
-- Requests have a bounded timeout and response-size limit.
-- No OSIRIS API key is committed or required for the public read endpoints currently documented by OSIRIS.
-- FRIDAY is instructed to treat upstream machine-assessment/risk fields as source metadata, not independently verified forecasts.
-- Each result carries source and endpoint context so FRIDAY can distinguish live source data from its own interpretation.
+- OSIRIS access is read-only and allow-listed.
+- Network requests have bounded timeout and response-size limits.
+- Upstream machine-assessment/risk fields are treated as source metadata, not verified forecasts.
+- Source/endpoint context is retained for live-data responses.
+- Active scanning/recon capabilities are intentionally not exposed through the OSIRIS registry.
+- Git mutation tools remain executor permission-gated.
 
-### Dependency impact
-
-No new Python dependency was required; FRIDAY already includes `aiohttp`.
-
-### Architecture
+## Architecture
 
 ```text
 User request
     │
     ▼
-FRIDAY model
+FRIDAY supervisor
     │
-    ├── narrow intent ──────► specific osiris.* tool
-    │
-    └── broad situation ────► osiris.intelligence_brief
-                                  │
-                       ┌──────────┼──────────┐
-                       ▼          ▼          ▼
-                     news      conflicts   weather
-                       │          │          │
-                       └──────────┼──────────┘
-                                  ▼
-                         source-aware snapshot
-                                  │
-                                  ▼
-                         FRIDAY final answer
+    ├── narrow live-data intent ──► specific osiris.* tool
+    ├── broad situation ──────────► intelligence_brief
+    └── engineering goal ────────► Developer Agent
+                                      │
+                               inspect → implement
+                                      │
+                                verify → repair
+                                      │
+                              git.add → commit → push
+                                      │
+                                      ▼
+                              feature branch / PR
 ```
 
 ## Verification status
 
-The implementation was reviewed against the repository architecture and OSIRIS's current published API reference. Local FRIDAY test/build execution was not available from this environment, so no local test result is being claimed here.
+Repository-side implementation and diff were reviewed. Local FRIDAY test/build execution is not available from this environment, so no local test result is claimed.
