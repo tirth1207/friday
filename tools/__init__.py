@@ -24,6 +24,13 @@ from tools.os.os_tools import (
     os_system_info, os_list_processes, os_disk_usage, os_list_drives, os_read_file,
     os_write_file, os_list_directory, os_create_directory, os_path_exists, os_delete_path,
 )
+from tools.osiris.osiris_tools import (
+    osiris_health, osiris_stats, osiris_intelligence, osiris_news, osiris_weather,
+    osiris_conflicts, osiris_satellites, osiris_flights, osiris_earthquakes, osiris_fires,
+    osiris_space_weather, osiris_gdelt, osiris_country_risk, osiris_markets,
+    osiris_region_dossier,
+)
+from tools.osiris.intelligence_router import osiris_intelligence_brief
 
 
 async def developer_run(goal: str, repository: str | None = None, max_iterations: int = 4):
@@ -59,6 +66,23 @@ def register_all_tools():
     tool_registry.register(name="github.branches", func=github_list_branches, description="List repository branches.", permission=PermissionLevel.SAFE, parameters={"repository": "string", "limit": "number", "page": "number"})
     tool_registry.register(name="github.commit", func=github_get_commit, description="Fetch one commit with stats and changed files.", permission=PermissionLevel.SAFE, parameters={"repository": "string", "sha": "string"})
     tool_registry.register(name="github.api", func=github_api, description="Universal GitHub REST API tool. Mutations remain permission-gated.", permission=PermissionLevel.PERMISSION_REQUIRED, parameters={"method": "string", "path": "string", "params": "object", "body": "object"})
+
+    tool_registry.register(name="osiris.health", func=osiris_health, description="Check whether the public OSIRIS Intelligence API is reachable.", permission=PermissionLevel.SAFE)
+    tool_registry.register(name="osiris.stats", func=osiris_stats, description="Fetch lightweight aggregate OSIRIS intelligence feed counters.", permission=PermissionLevel.SAFE)
+    tool_registry.register(name="osiris.intelligence", func=osiris_intelligence, description="Call one allow-listed read-only OSIRIS intelligence endpoint. Use for live news, weather, conflicts, satellites, flights, earthquakes, fires, space weather, GDELT, country risk, markets, or similar situational data.", permission=PermissionLevel.SAFE, parameters={"endpoint": "string", "query": "string", "latitude": "number", "longitude": "number", "radius_km": "number"})
+    tool_registry.register(name="osiris.intelligence_brief", func=osiris_intelligence_brief, description="Build a bounded multi-feed OSIRIS snapshot from user intent. Use for broad situational questions; use a specific osiris.* tool for narrow requests.", permission=PermissionLevel.SAFE, parameters={"topic": "string", "query": "string", "latitude": "number", "longitude": "number", "max_sources": "number"})
+    tool_registry.register(name="osiris.news", func=osiris_news, description="Fetch aggregated OSIRIS news. Treat machine-assessment fields as unverified metadata, not forecasts.", permission=PermissionLevel.SAFE, parameters={"query": "string"})
+    tool_registry.register(name="osiris.weather", func=osiris_weather, description="Fetch OSIRIS severe-weather and natural-event data.", permission=PermissionLevel.SAFE)
+    tool_registry.register(name="osiris.conflicts", func=osiris_conflicts, description="Fetch active conflict zones and incident data from OSIRIS.", permission=PermissionLevel.SAFE)
+    tool_registry.register(name="osiris.satellites", func=osiris_satellites, description="Fetch tracked satellite/orbital-object data from OSIRIS.", permission=PermissionLevel.SAFE)
+    tool_registry.register(name="osiris.flights", func=osiris_flights, description="Fetch live ADS-B aircraft data from OSIRIS.", permission=PermissionLevel.SAFE)
+    tool_registry.register(name="osiris.earthquakes", func=osiris_earthquakes, description="Fetch recent seismic events from OSIRIS.", permission=PermissionLevel.SAFE)
+    tool_registry.register(name="osiris.fires", func=osiris_fires, description="Fetch active wildfire hotspots from OSIRIS.", permission=PermissionLevel.SAFE)
+    tool_registry.register(name="osiris.space_weather", func=osiris_space_weather, description="Fetch geomagnetic and solar-flare conditions from OSIRIS.", permission=PermissionLevel.SAFE)
+    tool_registry.register(name="osiris.gdelt", func=osiris_gdelt, description="Fetch geocoded world events from GDELT via OSIRIS.", permission=PermissionLevel.SAFE)
+    tool_registry.register(name="osiris.country_risk", func=osiris_country_risk, description="Fetch OSIRIS country risk scoring data.", permission=PermissionLevel.SAFE)
+    tool_registry.register(name="osiris.markets", func=osiris_markets, description="Fetch defence-sector equities and commodities from OSIRIS.", permission=PermissionLevel.SAFE)
+    tool_registry.register(name="osiris.region_dossier", func=osiris_region_dossier, description="Fetch a composite OSIRIS intelligence summary around a latitude/longitude.", permission=PermissionLevel.SAFE, parameters={"latitude": "number", "longitude": "number"})
 
     tool_registry.register(name="agent.create", func=create_agent_definition, description="Create a safe dynamic specialist-agent definition from existing tools.", permission=PermissionLevel.SAFE, parameters={"name": "string", "role": "string", "description": "string", "tools": "array", "system_prompt": "string"})
     tool_registry.register(name="agent.list", func=list_agent_definitions, description="List dynamic specialist-agent definitions.", permission=PermissionLevel.SAFE)
