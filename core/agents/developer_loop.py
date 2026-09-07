@@ -11,7 +11,7 @@ from core.runtime.workspace import scoped_workspace
 from providers.nvidia.client import get_model
 from tools.git.workspace import prepare_repository_workspace
 
-LOOP_PROMPT = """You are FRIDAY's Developer Agent. Operate as inspect -> plan -> implement -> verify -> repair -> finish.
+LOOP_PROMPT = """You are FRIDAY's Developer Agent. Operate as inspect -> plan -> implement -> verify -> repair -> finalize.
 For a selected GitHub repository, all filesystem, Git and terminal tools operate inside an isolated local clone.
 Inspect before changing anything. Use real tool evidence. Never invent file contents or test results.
 Run appropriate project tests/build/lint after changes. Repair failures within the bounded iteration limit.
@@ -20,7 +20,16 @@ All mutations use FRIDAY's permission-gated executor. Never call developer.run r
 Provider-safe names containing `__` map to dotted registry names, e.g. `github__analyze` -> `github.analyze`.
 Verification requires concrete successful tool evidence; model wording alone is never verification.
 
-OSIRIS intelligence tools are read-only live-data sources. When the engineering task needs current situational data, use the narrowest relevant `osiris.*` tool rather than web-searching or inventing data. Examples: osiris.news for current news, osiris.weather for severe weather, osiris.conflicts for active conflicts, osiris.satellites for orbital objects, osiris.flights for aircraft, osiris.earthquakes for seismic activity, osiris.fires for wildfires, osiris.space_weather for solar/geomagnetic conditions, osiris.gdelt for geocoded world events, osiris.country_risk for country risk data, osiris.markets for defence-sector markets, and osiris.region_dossier for a composite location brief. For broad situational questions such as "what is happening in Europe?", prefer `osiris.intelligence_brief`, which selects and gathers a bounded set of relevant feeds in parallel. Prefer one focused OSIRIS call when it answers the request; compose multiple calls only when the user explicitly needs a cross-domain brief. Treat upstream machine-assessment/risk fields as source metadata, not independently verified forecasts. Include the OSIRIS endpoint and timestamp/source context when reporting live data."""
+When repository work is complete and verification succeeds, use the Git mutation tools when they are available and
+mutation permission is enabled: stage only intentional files with `git.add`, create a concise conventional commit with
+`git.commit`, and push the current feature branch with `git.push`. Never force-push, never rewrite history, never stage
+secrets or generated junk, and never commit unless there are actual intended changes. Keep the repository on its feature
+branch; opening or merging a pull request is a separate GitHub operation.
+
+OSIRIS intelligence tools are read-only live-data sources. When the engineering task needs current situational data,
+use the narrowest relevant `osiris.*` tool. For broad situational questions, prefer `osiris.intelligence_brief`, which
+selects and gathers a bounded set of relevant feeds in parallel. Treat upstream machine-assessment/risk fields as source
+metadata, not independently verified forecasts. Include endpoint and timestamp/source context when reporting live data."""
 
 class DeveloperLoop:
     def __init__(self, max_iterations: int = 4, allow_mutations: bool = False):
@@ -79,7 +88,7 @@ class DeveloperLoop:
 
     async def run(self, goal: str, repository: str | None = None) -> dict[str, Any]:
         agent = "Developer Agent"
-        await agent_runtime.create_agent(agent, "Goal-driven inspect, implement, verify and repair loop.")
+        await agent_runtime.create_agent(agent, "Goal-driven inspect, implement, verify, repair and finalize loop.")
         await agent_runtime.start_agent(agent, f"Working on: {goal[:160]}")
         history: list[dict[str, Any]] = []
         state = {"goal": goal, "repository": repository, "iteration": 0, "verified": False}
