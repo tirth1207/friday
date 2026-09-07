@@ -1,9 +1,4 @@
-"""Read-only OSIRIS intelligence tools for FRIDAY.
-
-OSIRIS exposes public, keyless GET endpoints. These wrappers deliberately keep
-network access bounded to the OSIRIS host and return source/endpoint metadata
-alongside upstream JSON so the model can distinguish observations from inference.
-"""
+"""Read-only OSIRIS intelligence tools for FRIDAY."""
 
 from __future__ import annotations
 
@@ -29,7 +24,7 @@ _ENDPOINTS = {
 
 
 def osiris_endpoint_catalog() -> dict[str, str]:
-    """Return the immutable logical-name to OSIRIS-path catalog for diagnostics."""
+    """Return a copy of the allow-listed logical endpoint catalog."""
     return dict(_ENDPOINTS)
 
 
@@ -71,6 +66,7 @@ async def _request(endpoint: str, params: dict[str, Any] | None = None) -> dict[
 
 
 async def osiris_intelligence(endpoint: str, query: str = "", latitude: float | None = None, longitude: float | None = None, radius_km: float | None = None) -> dict[str, Any]:
+    """Call one allow-listed OSIRIS read endpoint."""
     params: dict[str, Any] = {}
     if query: params["q"] = query
     if latitude is not None: params["lat"] = latitude
@@ -79,26 +75,26 @@ async def osiris_intelligence(endpoint: str, query: str = "", latitude: float | 
     return await _request(endpoint, params)
 
 
-async def osiris_health(): return await _request("health")
-async def osiris_stats(): return await _request("stats")
-async def osiris_news(query: str = ""): return await _request("news", {"q": query} if query else None)
-async def osiris_live_news(query: str = ""): return await _request("live_news", {"q": query} if query else None)
-async def osiris_weather(): return await _request("weather")
-async def osiris_air_quality(): return await _request("air_quality")
-async def osiris_radar(): return await _request("radar")
-async def osiris_conflicts(): return await _request("conflicts")
-async def osiris_frontlines(): return await _request("frontlines")
-async def osiris_satellites(): return await _request("satellites")
-async def osiris_flights(): return await _request("flights")
-async def osiris_earthquakes(): return await _request("earthquakes")
-async def osiris_fires(): return await _request("fires")
-async def osiris_space_weather(): return await _request("space_weather")
-async def osiris_gdelt(): return await _request("gdelt")
-async def osiris_country_risk(): return await _request("country_risk")
-async def osiris_markets(): return await _request("markets")
-async def osiris_crypto(): return await _request("crypto")
-async def osiris_maritime(): return await _request("maritime")
-async def osiris_infrastructure(): return await _request("infrastructure")
-async def osiris_cyber_threats(): return await _request("cyber_threats")
-async def osiris_cyber_attacks(): return await _request("cyber_attacks")
-async def osiris_region_dossier(latitude: float, longitude: float): return await _request("region_dossier", {"lat": latitude, "lon": longitude})
+async def osiris_health() -> dict[str, Any]: return await _request("health")
+async def osiris_stats() -> dict[str, Any]: return await _request("stats")
+async def osiris_news(query: str = "") -> dict[str, Any]: return await _request("news", {"q": query} if query else None)
+async def osiris_live_news(query: str = "") -> dict[str, Any]: return await _request("live_news", {"q": query} if query else None)
+async def osiris_weather() -> dict[str, Any]: return await _request("weather")
+async def osiris_air_quality() -> dict[str, Any]: return await _request("air_quality")
+async def osiris_radar() -> dict[str, Any]: return await _request("radar")
+async def osiris_conflicts() -> dict[str, Any]: return await _request("conflicts")
+async def osiris_frontlines() -> dict[str, Any]: return await _request("frontlines")
+async def osiris_satellites() -> dict[str, Any]: return await _request("satellites")
+async def osiris_flights() -> dict[str, Any]: return await _request("flights")
+async def osiris_earthquakes() -> dict[str, Any]: return await _request("earthquakes")
+async def osiris_fires() -> dict[str, Any]: return await _request("fires")
+async def osiris_space_weather() -> dict[str, Any]: return await _request("space_weather")
+async def osiris_gdelt() -> dict[str, Any]: return await _request("gdelt")
+async def osiris_country_risk() -> dict[str, Any]: return await _request("country_risk")
+async def osiris_markets() -> dict[str, Any]: return await _request("markets")
+async def osiris_crypto() -> dict[str, Any]: return await _request("crypto")
+async def osiris_maritime() -> dict[str, Any]: return await _request("maritime")
+async def osiris_infrastructure() -> dict[str, Any]: return await _request("infrastructure")
+async def osiris_cyber_threats() -> dict[str, Any]: return await _request("cyber_threats")
+async def osiris_cyber_attacks() -> dict[str, Any]: return await _request("cyber_attacks")
+async def osiris_region_dossier(latitude: float, longitude: float) -> dict[str, Any]: return await _request("region_dossier", {"lat": latitude, "lon": longitude})
