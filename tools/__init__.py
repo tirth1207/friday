@@ -12,7 +12,7 @@ from tools.filesystem.write import write_file
 from tools.filesystem.create import create_file
 from tools.filesystem.exists import file_exists
 from tools.terminal.execute import execute_command
-from tools.git.git_tools import git_status, git_diff, git_log, git_branch
+from tools.git.git_tools import git_status, git_diff, git_log, git_branch, git_add, git_commit, git_push
 from tools.github.github_tools import (
     github_get_profile, github_list_repositories, github_get_repository, github_list_commits,
     github_get_contents, github_read_file, github_list_directory, github_get_file_metadata,
@@ -51,6 +51,9 @@ def register_all_tools():
     tool_registry.register(name="git.diff", func=git_diff, description="Get Git working tree diff.", permission=PermissionLevel.SAFE)
     tool_registry.register(name="git.log", func=git_log, description="Get Git commit history.", permission=PermissionLevel.SAFE, parameters={"max_count": "number"})
     tool_registry.register(name="git.branch", func=git_branch, description="Get Git branches.", permission=PermissionLevel.SAFE)
+    tool_registry.register(name="git.add", func=git_add, description="Stage explicit repository paths after permission approval.", permission=PermissionLevel.PERMISSION_REQUIRED, parameters={"paths": "array"})
+    tool_registry.register(name="git.commit", func=git_commit, description="Commit already-staged repository changes after permission approval.", permission=PermissionLevel.PERMISSION_REQUIRED, parameters={"message": "string"})
+    tool_registry.register(name="git.push", func=git_push, description="Push a configured Git remote/ref after permission approval.", permission=PermissionLevel.PERMISSION_REQUIRED, parameters={"remote": "string", "branch": "string"})
     tool_registry.register(name="developer.run", func=developer_run, description="Run a bounded engineering loop: inspect, implement, verify, repair, and learn for an explicit build/fix/finish request.", permission=PermissionLevel.PERMISSION_REQUIRED, parameters={"goal": "string", "repository": "string", "max_iterations": "number"})
 
     tool_registry.register(name="github.profile", func=github_get_profile, description="Fetch GitHub profile using configured credentials.", permission=PermissionLevel.SAFE, parameters={"username": "string"})
