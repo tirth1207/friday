@@ -36,7 +36,8 @@ class ResearchAgent(BaseAgent):
     def tools(self):
         from tools.research.web_fetch import web_fetch
         from tools.research.web_search import web_search
-        from tools.osiris.osiris_tools import osiris_intelligence_brief, osiris_news, osiris_live_news
+        from tools.osiris.osiris_tools import osiris_news, osiris_live_news
+        from tools.osiris.intelligence_router import osiris_intelligence_brief
         return [web_search, web_fetch, osiris_intelligence_brief, osiris_news, osiris_live_news]
 
     def build_langchain_agent(self):
