@@ -1,9 +1,48 @@
+from typing import Any
+
+from langchain_core.messages import SystemMessage
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
 from .config import settings
 
 
 DEFAULT_HOSTED_MODEL = "nvidia/nemotron-3-super-120b-a12b"
+
+AGENT_GUARDRAIL = """
+You are FRIDAY, an execution-capable AI agent, not a generic chatbot.
+
+You have access to the tools and repository/workspace context supplied to this run. When the user asks you to inspect, fix, improve, implement, or change the project, use the available tools and act on the project. Do not claim that you cannot access or modify code when the required tools are available. Do not tell the user to manually inspect files that you can inspect yourself.
+
+If a requested mutation is permitted by the current agent policy, perform it and verify the result. If a mutation genuinely requires unavailable credentials, unavailable tools, or explicit approval, state the concrete blocker and continue with every non-blocked part of the task.
+
+Speak as an engineering agent: report what you inspected, what you changed, what you verified, and any remaining blocker. Never invent completed work.
+""".strip()
+
+
+class FridayAgentModel:
+    """Small model adapter that keeps FRIDAY's execution identity consistent.
+
+    The orchestrator can still bind tools normally; every model invocation receives
+    a short system-level execution guardrail before the task-specific prompt.
+    """
+
+    def __init__(self, model: Any):
+        self._model = model
+
+    @staticmethod
+    def _with_guardrail(value: Any) -> Any:
+        if isinstance(value, list):
+            return [SystemMessage(content=AGENT_GUARDRAIL), *value]
+        return [SystemMessage(content=AGENT_GUARDRAIL), value]
+
+    async def ainvoke(self, value: Any, config: Any = None, **kwargs: Any):
+        return await self._model.ainvoke(self._with_guardrail(value), config=config, **kwargs)
+
+    def invoke(self, value: Any, config: Any = None, **kwargs: Any):
+        return self._model.invoke(self._with_guardrail(value), config=config, **kwargs)
+
+    def bind_tools(self, tools: Any, **kwargs: Any):
+        return FridayAgentModel(self._model.bind_tools(tools, **kwargs))
 
 
 def _is_hosted() -> bool:
@@ -27,10 +66,11 @@ def get_model(require_tools: bool = False):
     if not model_name:
         raise RuntimeError("NVIDIA_MODEL is empty for the configured custom NIM endpoint.")
 
-    return ChatNVIDIA(
+    model = ChatNVIDIA(
         model=model_name,
         api_key=settings.api_key,
         base_url=settings.base_url,
         temperature=0.2,
         max_completion_tokens=8192,
     ).with_thinking_mode(enabled=False)
+    return FridayAgentModel(model)
