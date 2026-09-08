@@ -16,7 +16,6 @@ def _is_greeting(text: str) -> bool:
 
 
 def _looks_like_followup(text: str) -> bool:
-    """Identify messages that normally modify/continue an existing task."""
     clean = _clean(text)
     return bool(re.fullmatch(r"(?:github|gitlab|git|yes|yeah|yep|no|nope|okay|ok|sure|continue|go ahead|top \d+|only \w+(?: \w+)?|just \w+(?: \w+)?|this|that|those|these|it|them|same|again|do it|compare|why|how about that)[!. ]*", clean))
 
@@ -28,10 +27,7 @@ def _is_repo_ranking(text: str) -> bool:
 
 def _is_repo_file_read_request(text: str) -> bool:
     clean = _clean(text)
-    has_repo_context = re.search(r"\b(?:repo|repository|project|github)\b", clean) is not None
-    has_read_intent = re.search(r"\b(?:read|fetch|show|open|get|retrieve|contents?|content)\b", clean) is not None
-    has_file_target = re.search(r"\b(?:file|files|path|\.env(?:\.example)?|package\.json|readme(?:\.md)?)\b", clean) is not None
-    return has_repo_context and has_read_intent and has_file_target
+    return re.search(r"\b(?:repo|repository|project|github)\b", clean) is not None and re.search(r"\b(?:read|fetch|show|open|get|retrieve|contents?|content)\b", clean) is not None and re.search(r"\b(?:file|files|path|\.env(?:\.example)?|package\.json|readme(?:\.md)?)\b", clean) is not None
 
 
 def _is_repo_structure_request(text: str) -> bool:
@@ -45,10 +41,7 @@ def _is_repo_structure_request(text: str) -> bool:
 
 def _is_repo_explanation_request(text: str, active_platform: str = "") -> bool:
     clean = _clean(text)
-    has_explain_intent = re.search(r"\b(?:explain|explanation|describe|analyze|analyse|understand|overview)\b", clean) is not None
-    has_project_context = re.search(r"\b(?:project|repo|repository|codebase)\b", clean) is not None
-    has_github_context = active_platform == "github" or re.search(r"\bgithub\b", clean) is not None
-    return has_explain_intent and has_project_context and has_github_context
+    return re.search(r"\b(?:explain|explanation|describe|analyze|analyse|understand|overview)\b", clean) is not None and re.search(r"\b(?:project|repo|repository|codebase)\b", clean) is not None and (active_platform == "github" or re.search(r"\bgithub\b", clean) is not None)
 
 
 def _is_friday_project_explain_request(text: str) -> bool:
@@ -62,16 +55,24 @@ def _is_env_key_request(text: str) -> bool:
 
 
 def _is_research_request(text: str) -> bool:
-    """Identify open-ended research that benefits from public-web evidence."""
     clean = _clean(text)
-    explicit_research = re.search(r"\b(?:research|researcher|investigate|investigation|look\s+up|look\s+online|search\s+(?:the\s+)?web|web\s+search|find\s+online|sources?|papers?|documentation)\b", clean) is not None
+    explicit_research = re.search(r"\b(?:research|investigate|investigation|look\s+up|look\s+online|search\s+(?:the\s+)?web|web\s+search|find\s+online|sources?|papers?|documentation)\b", clean) is not None
     open_question = re.search(r"\b(?:what|why|how|which|who|where|when|latest|current)\b", clean) is not None
     external_subject = re.search(r"\b(?:news|company|product|technology|library|framework|api|paper|study|market|person|website|internet|online)\b", clean) is not None
     return explicit_research or (open_question and external_subject)
 
 
+def _is_browser_request(text: str) -> bool:
+    clean = _clean(text)
+    return re.search(r"\b(?:browse|browser|website|webpage|navigate|click|type\s+into|open\s+(?:the\s+)?website)\b", clean) is not None and re.search(r"\bhttps?://|\b(?:site|page|website|webpage)\b", clean) is not None
+
+
+def _is_music_request(text: str) -> bool:
+    clean = _clean(text)
+    return re.search(r"\b(?:music|song|songs|spotify|play|pause|next track|current song|current track)\b", clean) is not None and re.search(r"\b(?:spotify|song|music|track|play|pause|next)\b", clean) is not None
+
+
 def resolve_request(message: str) -> dict[str, Any]:
-    """Resolve the current message against persistent conversation/task context."""
     recent = memory_store.get_recent_messages(limit=12)
     previous_user_messages = [m["content"] for m in recent if m["role"] == "user"]
     previous_user = previous_user_messages[-1] if previous_user_messages else ""
@@ -79,7 +80,6 @@ def resolve_request(message: str) -> dict[str, Any]:
     active_task = str(context.get("active_task", ""))
     active_platform = str(context.get("platform", ""))
     clean = _clean(message)
-
     is_greeting = _is_greeting(message)
     is_followup = _looks_like_followup(message) and bool(active_task or previous_user)
     resolved = message.strip()
@@ -120,8 +120,14 @@ def resolve_request(message: str) -> dict[str, Any]:
         platform = "github"
 
     if _is_research_request(resolved):
-        resolved = f"{resolved}\n\nMANDATORY EXECUTION REQUIREMENT: this is an open-ended research request. Use Research Agent tools. Prefer research.web.search for discovery, research.web.fetch for primary-source pages, and OSIRIS tools for structured/current intelligence when relevant. Base factual claims on retrieved evidence and include source URLs where available."
+        resolved = f"{resolved}\n\nCURRENT RESEARCH TASK. MANDATORY EXECUTION REQUIREMENT: use Research Agent tools. Prefer research.web.search for discovery, research.web.fetch for primary-source pages, and OSIRIS tools for structured/current intelligence when relevant. Base factual claims on retrieved evidence and include source URLs where available."
         platform = "research"
+    elif _is_browser_request(resolved):
+        resolved = f"{resolved}\n\nCURRENT BROWSER TASK. MANDATORY EXECUTION REQUIREMENT: use browser.navigate/read_page for safe browsing. browser.click and browser.type require explicit confirmation."
+        platform = "browser"
+    elif _is_music_request(resolved):
+        resolved = f"{resolved}\n\nCURRENT MUSIC TASK. MANDATORY EXECUTION REQUIREMENT: use music.* tools for Spotify playback. Playback mutations require explicit confirmation; music.current is read-only."
+        platform = "music"
 
     if not is_greeting and not is_followup:
         active_task = message.strip()
