@@ -31,7 +31,40 @@ class DeveloperAgent(BaseAgent):
 
 class ResearchAgent(BaseAgent):
     def __init__(self):
-        super().__init__("Research Agent", "Research", "Inspects documentation, architecture, external information, and project context.")
+        super().__init__("Research Agent", "Research", "Researches the public web and structured OSIRIS feeds, fetches source pages, and synthesizes evidence.")
+
+    def tools(self):
+        from tools.research.web_fetch import web_fetch
+        from tools.research.web_search import web_search
+        from tools.osiris.osiris_tools import osiris_news, osiris_live_news
+        from tools.osiris.intelligence_router import osiris_intelligence_brief
+        return [web_search, web_fetch, osiris_intelligence_brief, osiris_news, osiris_live_news]
+
+    def build_langchain_agent(self):
+        from langchain.agents import create_agent
+        from providers.nvidia.client import get_model
+        return create_agent(model=get_model(), tools=self.tools(), system_prompt="You are FRIDAY's Research Agent. Search broadly when needed, fetch primary pages, distinguish evidence from inference, and cite source URLs in your final synthesis.", name="research_agent")
+
+
+class BrowserAgent(BaseAgent):
+    def __init__(self):
+        super().__init__("Browser Agent", "Browser Automation", "Navigates stateful headless browser sessions and reads/interacts with webpages under permission controls.")
+
+    def tools(self):
+        from tools.browser.browser_tools import BROWSER_LANGCHAIN_TOOLS
+        return BROWSER_LANGCHAIN_TOOLS
+
+    def allowed_tools(self) -> tuple[str, ...]:
+        return ("browser.navigate", "browser.read_page", "browser.click", "browser.type", "browser.screenshot", "browser.close")
+
+
+class MusicAgent(BaseAgent):
+    def __init__(self):
+        super().__init__("Music Agent", "Music Control", "Controls Spotify playback and reports the current track when the user's Spotify integration is configured.")
+
+    def tools(self):
+        from tools.music.music_tools import MUSIC_LANGCHAIN_TOOLS
+        return MUSIC_LANGCHAIN_TOOLS
 
 
 class GitHubAgent(BaseAgent):
@@ -75,7 +108,7 @@ class QAAgent(BaseAgent):
 
 class CognitionAgent(BaseAgent):
     def __init__(self):
-        super().__init__("Cognition Agent", "Learning & Curiosity", "Maintains reusable experiences, recalls prior lessons, creates bounded curiosity probes, and checkpoints long-running goals.")
+        super().__init__("Cognition Agent", "Learning & Curiosity", "Maintains reusable experiences, recalls prior lessons, and maintains explicit user profile memory.")
 
     def allowed_tools(self) -> tuple[str, ...]:
-        return ("cognition.learn", "cognition.recall", "cognition.curiosity", "cognition.checkpoint")
+        return ("cognition.learn", "cognition.recall", "cognition.curiosity", "cognition.checkpoint", "memory.remember", "memory.recall")
