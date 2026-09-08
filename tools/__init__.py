@@ -5,6 +5,11 @@ from core.agents.factory import create_agent_definition, list_agent_definitions
 from core.agents.developer_loop import DeveloperLoop
 from tools.self_improvement import self_inspect, self_read_file
 from tools.cognition.cognition_tools import learn_experience, recall_experiences, curiosity_probe, task_checkpoint
+from tools.memory.memory_tools import remember, recall
+from tools.research.web_search import web_search
+from tools.research.web_fetch import web_fetch
+from tools.browser.browser_tools import browser_navigate, browser_read_page, browser_click, browser_type, browser_screenshot, browser_close
+from tools.music.music_tools import music_play, music_pause, music_next, music_current
 from tools.filesystem.list import list_directory
 from tools.filesystem.search import search_files
 from tools.filesystem.read import read_file
@@ -55,6 +60,21 @@ def register_all_tools():
     tool_registry.register(name="git.commit", func=git_commit, description="Commit already-staged repository changes after permission approval.", permission=PermissionLevel.PERMISSION_REQUIRED, parameters={"message": "string"})
     tool_registry.register(name="git.push", func=git_push, description="Push a configured Git remote/ref after permission approval.", permission=PermissionLevel.PERMISSION_REQUIRED, parameters={"remote": "string", "branch": "string"})
     tool_registry.register(name="developer.run", func=developer_run, description="Run a bounded engineering loop: inspect, implement, verify, repair, and learn for an explicit build/fix/finish request.", permission=PermissionLevel.PERMISSION_REQUIRED, parameters={"goal": "string", "repository": "string", "max_iterations": "number"})
+
+    tool_registry.register(name="memory.remember", func=remember, description="Persist an explicitly stated user preference or behavior fact.", permission=PermissionLevel.SAFE, parameters={"category": "string", "fact": "string", "source_message": "string"})
+    tool_registry.register(name="memory.recall", func=recall, description="Recall saved user preferences and behavior facts.", permission=PermissionLevel.SAFE, parameters={"query": "string", "limit": "number"})
+    tool_registry.register(name="research.web.search", func=web_search, description="Search the public web for general research.", permission=PermissionLevel.SAFE, parameters={"query": "string", "max_results": "number"})
+    tool_registry.register(name="research.web.fetch", func=web_fetch, description="Fetch a public webpage and extract bounded readable text.", permission=PermissionLevel.SAFE, parameters={"url": "string"})
+    tool_registry.register(name="browser.navigate", func=browser_navigate, description="Navigate a headless browser to a public HTTP(S) webpage.", permission=PermissionLevel.SAFE, parameters={"url": "string"})
+    tool_registry.register(name="browser.read_page", func=browser_read_page, description="Read bounded text from the current browser page.", permission=PermissionLevel.SAFE)
+    tool_registry.register(name="browser.click", func=browser_click, description="Click an element in the current browser session after explicit approval.", permission=PermissionLevel.PERMISSION_REQUIRED, parameters={"selector_or_description": "string"})
+    tool_registry.register(name="browser.type", func=browser_type, description="Type into a deterministic browser input after explicit approval.", permission=PermissionLevel.PERMISSION_REQUIRED, parameters={"text": "string", "selector": "string"})
+    tool_registry.register(name="browser.screenshot", func=browser_screenshot, description="Capture the current browser page to the scoped workspace.", permission=PermissionLevel.SAFE, parameters={"full_page": "boolean"})
+    tool_registry.register(name="browser.close", func=browser_close, description="Close the current browser session.", permission=PermissionLevel.SAFE)
+    tool_registry.register(name="music.play", func=music_play, description="Search Spotify and start the top matching track.", permission=PermissionLevel.PERMISSION_REQUIRED, parameters={"query": "string"})
+    tool_registry.register(name="music.pause", func=music_pause, description="Pause Spotify playback after explicit approval.", permission=PermissionLevel.PERMISSION_REQUIRED)
+    tool_registry.register(name="music.next", func=music_next, description="Skip to the next Spotify track after explicit approval.", permission=PermissionLevel.PERMISSION_REQUIRED)
+    tool_registry.register(name="music.current", func=music_current, description="Read the current Spotify playback state.", permission=PermissionLevel.SAFE)
 
     tool_registry.register(name="github.profile", func=github_get_profile, description="Fetch GitHub profile using configured credentials.", permission=PermissionLevel.SAFE, parameters={"username": "string"})
     tool_registry.register(name="github.repositories", func=github_list_repositories, description="List repositories accessible to the authenticated GitHub account.", permission=PermissionLevel.SAFE, parameters={"username": "string", "limit": "number", "sort": "string", "page": "number"})
