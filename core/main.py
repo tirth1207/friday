@@ -71,7 +71,6 @@ async def health():
 
 @app.get("/conversations")
 async def conversations(limit: int = 80):
-    # Keep history requests bounded even if an older frontend sends a larger value.
     safe_limit = max(1, min(limit, 80))
     return {"conversations": memory_store.get_conversations(safe_limit)}
 
@@ -194,7 +193,23 @@ async def chat(request: ChatRequest):
         return {"response": response, "repository": repository}
     except Exception as error:
         print(f"[FRIDAY] Chat error: {error}")
-        return {"response": "I couldn't complete that request because the AI service is currently unavailable. Please try again.", "error": str(error)}
+        error_text = str(error).strip()
+        lowered = error_text.lower()
+        if "nvidia_api_key" in lowered or "api key" in lowered:
+            user_message = "FRIDAY is configured, but the NVIDIA API key is missing or invalid. Check NVIDIA_API_KEY in the backend .env and restart FRIDAY."
+        elif "timeout" in lowered or "timed out" in lowered:
+            user_message = "FRIDAY reached the AI provider, but the request timed out. Try again, or reduce the request size if this is a large repository operation."
+        elif "401" in lowered or "403" in lowered or "unauthorized" in lowered or "forbidden" in lowered:
+            user_message = "FRIDAY reached the AI provider, but authentication was rejected. Check the NVIDIA API key and model access configured for this deployment."
+        elif "404" in lowered and ("model" in lowered or "nvidia" in lowered):
+            user_message = "FRIDAY reached NVIDIA, but the configured model was not found or is not available to this API key. Check the NVIDIA model configuration."
+        elif "429" in lowered or "rate limit" in lowered:
+            user_message = "FRIDAY is temporarily rate-limited by the AI provider. Please retry shortly."
+        elif "connection" in lowered or "connect" in lowered:
+            user_message = "FRIDAY could not connect to the AI provider. Check the backend network connection and NVIDIA endpoint configuration."
+        else:
+            user_message = "FRIDAY could not complete that request. The backend returned an AI/provider error; check the server logs for the exact cause and try again."
+        return {"response": user_message, "error": error_text, "status": "ai_unavailable"}
 
 
 @app.websocket("/ws")
