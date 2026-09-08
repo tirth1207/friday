@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
@@ -68,17 +67,17 @@ async def browser_read_page() -> dict[str, Any]:
 
 @tool("browser_click")
 async def browser_click(selector_or_description: str) -> dict[str, Any]:
-    """Click an element by CSS selector or accessible role/name description."""
+    """Click an element by CSS selector, exact text, or role:name."""
     page = await _page()
     target = selector_or_description.strip()
-    if target.startswith("role="):
-        _, role, _, name = target.split("=", 1)[0], "", "", ""
     try:
         if target.startswith("text="):
             await page.get_by_text(target[5:], exact=True).click()
         elif target.startswith("role:"):
             spec = target[5:]
             role, _, name = spec.partition("/")
+            if not role:
+                raise ValueError("Role target must look like role:button/Submit")
             await page.get_by_role(role, name=name or None).click()
         else:
             await page.locator(target).click()
@@ -89,7 +88,7 @@ async def browser_click(selector_or_description: str) -> dict[str, Any]:
 
 @tool("browser_type")
 async def browser_type(text: str, selector: str | None = None) -> dict[str, Any]:
-    """Type text into the selected input; selector is required for deterministic targeting."""
+    """Type text into a deterministic CSS-selected input."""
     if not selector:
         raise ValueError("A CSS selector is required for browser.type to avoid ambiguous input targeting.")
     page = await _page()
