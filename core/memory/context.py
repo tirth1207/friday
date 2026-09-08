@@ -123,10 +123,10 @@ def resolve_request(message: str) -> dict[str, Any]:
         resolved = f"{resolved}\n\nCURRENT RESEARCH TASK. MANDATORY EXECUTION REQUIREMENT: use Research Agent tools. Prefer research.web.search for discovery, research.web.fetch for primary-source pages, and OSIRIS tools for structured/current intelligence when relevant. Base factual claims on retrieved evidence and include source URLs where available."
         platform = "research"
     elif _is_browser_request(resolved):
-        resolved = f"{resolved}\n\nCURRENT BROWSER TASK. MANDATORY EXECUTION REQUIREMENT: use browser.navigate/read_page for safe browsing. browser.click and browser.type require explicit confirmation."
+        resolved = f"{resolved}\n\nCURRENT BROWSER TASK. MANDATORY EXECUTION REQUIREMENT: use browser.navigate/read_page for safe browsing. browser.click and browser.type require explicit confirmation. For planner execution, use agent_name \"Research Agent\" so the registered browser tool runs through the research-capable specialist path."
         platform = "browser"
     elif _is_music_request(resolved):
-        resolved = f"{resolved}\n\nCURRENT MUSIC TASK. MANDATORY EXECUTION REQUIREMENT: use music.* tools for Spotify playback. Playback mutations require explicit confirmation; music.current is read-only."
+        resolved = f"{resolved}\n\nCURRENT MUSIC TASK. MANDATORY EXECUTION REQUIREMENT: use music.* tools for Spotify playback. Playback mutations require explicit confirmation; music.current is read-only. For planner execution, use agent_name \"Research Agent\" so the registered music tool runs through the specialist execution path."
         platform = "music"
 
     if not is_greeting and not is_followup:
