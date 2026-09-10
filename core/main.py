@@ -83,6 +83,7 @@ def _provider_error_message(error: Exception) -> str:
         "nvidia", "chatnvidia", "integrate.api.nvidia.com", "nvidia_api_key",
         "api key", "rate limit", "too many requests", "429", "401", "403",
         "model not found", "provider", "llm", "completion",
+        "internal server error", "service unavailable", "bad gateway", "500", "502", "503",
     )
     if not any(marker in lowered for marker in provider_markers):
         return f"FRIDAY's Developer Agent failed ({error_type}): {error_text or 'unknown backend error'}"
@@ -94,6 +95,8 @@ def _provider_error_message(error: Exception) -> str:
         return "FRIDAY reached NVIDIA, but the configured model was not found or is unavailable to this key."
     if "429" in lowered or "rate limit" in lowered or "too many requests" in lowered:
         return "FRIDAY reached NVIDIA, but the provider is rate-limiting this key/model. Retry shortly."
+    if "500" in lowered or "502" in lowered or "503" in lowered or "internal server error" in lowered or "service unavailable" in lowered:
+        return "FRIDAY reached NVIDIA, but the provider returned a server-side error. This is usually transient — try again in a moment."
     if "timeout" in lowered or "timed out" in lowered:
         return "FRIDAY reached NVIDIA, but the provider request timed out."
     if "connection" in lowered or "connect" in lowered or "dns" in lowered:
