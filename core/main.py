@@ -33,6 +33,16 @@ class RepositoryContextRequest(BaseModel):
     repository: str | None = None
 
 
+def _normalize_repository_context(value: str | None) -> str | None:
+    """Normalize repository labels that may come from the UI/chat transcript."""
+    if not value:
+        return None
+    normalized = value.strip()
+    normalized = re.sub(r"^repository\s*:\s*", "", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"^repository(?=[A-Za-z0-9_.-]+/)", "", normalized, flags=re.IGNORECASE)
+    return normalized or None
+
+
 def _explicit_repository_from_message(message: str) -> str | None:
     text = message or ""
     match = re.search(r"(?:\brepository\b\s*[:\-]?\s*)?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b", text, re.IGNORECASE)
@@ -41,33 +51,38 @@ def _explicit_repository_from_message(message: str) -> str | None:
 
 def _is_explicit_build_request(message: str) -> bool:
     text = (message or "").strip().lower()
-    action = re.search(r"\b(build|implement|finish|complete|fix|repair|refactor|write|create|make|add|remove|replace|update|ship)\b", text)
-    target = re.search(r"\b(code|feature|project|repo|repository|bug|issue|file|component|frontend|backend|api|app|application|function|test|implementation|improvement|change)\b", text)
+    action = re.search(r"\b(build|implement|finish|complete|fix|repair|refactor|write|create|make|add|remove|replace|update|ship|commit|push)\b", text)
+    target = re.search(r"\b(code|feature|project|repo|repository|bug|issue|file|component|frontend|backend|api|app|application|function|test|implementation|improvement|change|page)\b", text)
     return bool(action and target)
 
 
 def _provider_error_message(error: Exception) -> str:
-    """Turn provider/client exceptions into a useful user-facing diagnosis."""
+    """Return a diagnosis only when the exception actually came from the provider."""
     error_text = str(error).strip()
     lowered = error_text.lower()
     error_type = type(error).__name__
 
+    provider_markers = (
+        "nvidia", "chatnvidia", "integrate.api.nvidia.com", "nvidia_api_key",
+        "api key", "rate limit", "too many requests", "429", "401", "403",
+        "model not found", "provider", "llm", "completion",
+    )
+    if not any(marker in lowered for marker in provider_markers):
+        return f"FRIDAY's Developer Agent failed ({error_type}): {error_text or 'unknown backend error'}"
+
     if "nvidia_api_key" in lowered or "api key" in lowered or "invalid api key" in lowered:
         return "FRIDAY is configured, but the NVIDIA API key is missing or invalid. Set NVIDIA_API_KEY in the backend .env and restart FRIDAY."
     if "401" in lowered or "403" in lowered or "unauthorized" in lowered or "forbidden" in lowered:
-        return "FRIDAY reached NVIDIA, but authentication was rejected. Check NVIDIA_API_KEY and make sure the key is active at NVIDIA's API dashboard."
+        return "FRIDAY reached NVIDIA, but authentication was rejected. Check NVIDIA_API_KEY and make sure the key is active."
     if "404" in lowered and ("model" in lowered or "nvidia" in lowered):
-        return "FRIDAY reached NVIDIA, but the configured model was not found or is unavailable to this key. Check the NVIDIA model configuration."
+        return "FRIDAY reached NVIDIA, but the configured model was not found or is unavailable to this key."
     if "429" in lowered or "rate limit" in lowered or "too many requests" in lowered:
-        return "FRIDAY reached NVIDIA, but the provider is rate-limiting this key/model. Retry shortly; the backend now retries transient provider failures automatically."
+        return "FRIDAY reached NVIDIA, but the provider is rate-limiting this key/model. Retry shortly."
     if "timeout" in lowered or "timed out" in lowered:
-        return "FRIDAY reached NVIDIA, but the provider request timed out. The backend retries transient failures automatically; try again if it persists."
+        return "FRIDAY reached NVIDIA, but the provider request timed out."
     if "connection" in lowered or "connect" in lowered or "dns" in lowered:
-        return "FRIDAY could not connect to the NVIDIA endpoint. Check the backend network connection and NVIDIA endpoint configuration."
-
-    # Keep the generic message only as a final fallback, but include the exception type
-    # so server logs can be correlated without exposing credentials or hidden prompts.
-    return f"FRIDAY's NVIDIA provider request failed ({error_type}). Check the backend logs for the exact provider response and retry."
+        return "FRIDAY could not connect to the NVIDIA endpoint. Check the backend network connection."
+    return f"FRIDAY's NVIDIA provider request failed ({error_type}): {error_text or 'unknown provider error'}"
 
 
 @app.on_event("startup")
@@ -152,8 +167,8 @@ async def github_repository_context():
 
 @app.post("/auth/github/repository-context")
 async def github_repository_context_set(request: RepositoryContextRequest):
-    repository = request.repository
-    if repository is None or not repository.strip():
+    repository = _normalize_repository_context(request.repository)
+    if repository is None:
         clear_active_repository(); return {"repository": None}
     try:
         await refresh_connection_if_needed()
@@ -186,7 +201,7 @@ async def chat(request: ChatRequest):
     try:
         await refresh_connection_if_needed()
         explicit_repository = _explicit_repository_from_message(request.message)
-        repository = explicit_repository or (request.repository.strip() if request.repository else None) or get_active_repository()
+        repository = explicit_repository or _normalize_repository_context(request.repository) or _normalize_repository_context(get_active_repository())
         if repository:
             from tools.github.repository_agent import _resolve_repository
             repository = await _resolve_repository(repository)
