@@ -2,15 +2,13 @@ from core.main import _explicit_repository_from_message, _normalize_repository_c
 from core.orchestrator_structured import _extract_repository_target
 
 
-def test_concatenated_repository_prefix_is_parsed():
-    assert _extract_repository_target(
-        "Repositorytirth1207/AGI_Maze explain this project",
-        "explain this project",
-        selected_repository="tirth1207/Orbit",
+def test_concatenated_repository_prefix_is_parsed_at_chat_boundary():
+    assert _explicit_repository_from_message(
+        "Repositorytirth1207/AGI_Maze explain this project"
     ) == "tirth1207/AGI_Maze"
 
 
-def test_chat_extracts_concatenated_repository_prefix():
+def test_chat_extracts_concatenated_repository_prefix_for_build_request():
     assert _explicit_repository_from_message(
         "Repositorytirth1207/friday commit one simple test/page.tsx"
     ) == "tirth1207/friday"
@@ -22,7 +20,7 @@ def test_chat_extracts_normal_repository_prefix():
     ) == "tirth1207/friday"
 
 
-def test_pronoun_request_uses_selected_repository():
+def test_structured_agent_uses_canonical_selected_repository_context():
     assert _extract_repository_target(
         "explain this project",
         "explain this project",
