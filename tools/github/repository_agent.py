@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import re
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -84,18 +85,14 @@ async def _request(path: str, params: dict[str, Any] | None = None) -> Any:
             except Exception:
                 detail = response.text[:300]
             if response.status_code in {401, 403} and not settings.pat.strip():
-                raise RuntimeError(
-                    f"GitHub API {response.status_code}: {detail}. This repository or endpoint requires GITHUB_PAT."
-                )
+                raise RuntimeError(f"GitHub API {response.status_code}: {detail}. This repository or endpoint requires GITHUB_PAT.")
             raise RuntimeError(f"GitHub API {response.status_code}: {detail}")
         return response.json()
 
 
 def _normalize_repository_value(value: str) -> str:
-    """Normalize repository labels accidentally prepended by the chat/UI."""
     raw = value.strip()
-    raw = raw.removeprefix("Repository:").removeprefix("repository:").strip()
-    # The UI has historically emitted `Repositorytirth1207/friday` without a separator.
+    raw = re.sub(r"^repository\s*:\s*", "", raw, flags=re.IGNORECASE)
     raw = re.sub(r"^repository(?=[A-Za-z0-9_.-]+/)", "", raw, flags=re.IGNORECASE)
     return raw.strip()
 
@@ -115,24 +112,15 @@ def _repo_parts(value: str) -> tuple[str | None, str]:
 
 
 async def _accessible_repositories(limit: int = 100) -> list[dict[str, Any]]:
-    """Return repositories visible to the configured GitHub account."""
     if not settings.pat.strip():
         return []
-
     repositories: list[dict[str, Any]] = []
     per_page = max(1, min(limit, 100))
     for page in range(1, MAX_REPOSITORY_PAGES + 1):
-        data = await _request(
-            "/user/repos",
-            {
-                "visibility": "all",
-                "affiliation": "owner,collaborator,organization_member",
-                "sort": "pushed",
-                "direction": "desc",
-                "per_page": per_page,
-                "page": page,
-            },
-        )
+        data = await _request("/user/repos", {
+            "visibility": "all", "affiliation": "owner,collaborator,organization_member",
+            "sort": "pushed", "direction": "desc", "per_page": per_page, "page": page,
+        })
         if not isinstance(data, list):
             break
         repositories.extend(data)
@@ -154,21 +142,115 @@ def _match_repositories(items: list[dict[str, Any]], requested_name: str) -> lis
     if exact:
         return exact
     if collapsed:
-        return [
-            item for item in items
-            if "".join(char for char in str(item.get("name") or "").casefold() if char.isalnum()) == collapsed
-        ]
+        return [item for item in items if "".join(char for char in str(item.get("name") or "").casefold() if char.isalnum()) == collapsed]
     return []
 
 
 def _match_repository(items: list[dict[str, Any]], requested_name: str) -> dict[str, Any] | None:
-    matches = _match_repositories(items, requested_name)
-    return matches[0] if matches else None
+    return (_match_repositories(items, requested_name) or [None])[0]
 
 
 async def _resolve_repository(value: str) -> str:
-    owner, name = _repo_parts(value)
-
-    if owner and "/" in _normalize_repository_value(value):
+    normalized = _normalize_repository_value(value)
+    owner, name = _repo_parts(normalized)
+    if owner and "/" in normalized:
         data = await _request(f"/repos/{owner}/{name}")
         return str(data.get("full_name") or f"{owner}/{name}")
+
+    accessible = await _accessible_repositories()
+    matches = _match_repositories(accessible, name)
+    if len(matches) == 1:
+        return str(matches[0].get("full_name"))
+    if len(matches) > 1:
+        raise RuntimeError(f"Ambiguous GitHub repository name '{name}'. Candidates: {', '.join(str(item.get('full_name')) for item in matches[:5])}")
+
+    if owner:
+        try:
+            data = await _request(f"/repos/{owner}/{name}")
+            return str(data.get("full_name") or f"{owner}/{name}")
+        except RuntimeError as error:
+            if "404" not in str(error):
+                raise
+
+    try:
+        data = await _request("/search/repositories", {"q": f"{name} in:name", "per_page": 10})
+    except RuntimeError as error:
+        raise RuntimeError(f"Could not resolve GitHub repository '{name}': {error}") from error
+    matches = _match_repositories(data.get("items") or [], name)
+    if len(matches) == 1:
+        return str(matches[0].get("full_name"))
+    if len(matches) > 1:
+        raise RuntimeError(f"Ambiguous GitHub repository name '{name}'. Candidates: {', '.join(str(item.get('full_name')) for item in matches[:5])}")
+    raise RuntimeError(f"Could not resolve GitHub repository: {name}")
+
+
+def _score_path(path: str) -> int:
+    clean = path.replace("\\", "/").lower()
+    name = clean.rsplit("/", 1)[-1]
+    if any(clean.startswith(prefix) for prefix in SKIP_PREFIXES):
+        return -10000
+    score = 1000 if clean in IMPORTANT_EXACT else 0
+    if name in {"readme.md", "readme.mdx"}: score += 900
+    if name in {"package.json", "pyproject.toml", "requirements.txt", "go.mod", "cargo.toml"}: score += 850
+    if any(clean.startswith(prefix) for prefix in IMPORTANT_DIRS): score += 120
+    for keyword, points in {"architecture":180,"api":150,"server":140,"backend":140,"frontend":130,"database":130,"schema":130,"auth":120,"route":110,"controller":110,"service":100,"model":90,"config":90,"main":80,"index":70,"app":60,"layout":50,"document":40,"test":25}.items():
+        if keyword in clean: score += points
+    if ".github/" in clean: score += 60
+    if clean.endswith(tuple(TEXT_EXTENSIONS)): score += 20
+    return score
+
+
+def _select_files(tree: list[dict[str, Any]], max_files: int) -> list[str]:
+    candidates: list[tuple[int, str]] = []
+    for item in tree:
+        if item.get("type") != "blob": continue
+        path = str(item.get("path") or "")
+        lower = path.lower()
+        if not lower.endswith(tuple(TEXT_EXTENSIONS)) and lower.rsplit("/", 1)[-1] not in IMPORTANT_EXACT: continue
+        score = _score_path(path)
+        if score > -1000: candidates.append((score, path))
+    candidates.sort(key=lambda pair: (-pair[0], pair[1]))
+    return [path for _, path in candidates[:max_files]]
+
+
+async def _repository_metadata(repository: str) -> dict[str, Any]:
+    data = await _request(f"/repos/{repository}")
+    return {"name":data.get("name"),"full_name":data.get("full_name"),"private":data.get("private"),"fork":data.get("fork"),"archived":data.get("archived"),"description":data.get("description"),"language":data.get("language"),"default_branch":data.get("default_branch"),"stars":data.get("stargazers_count",0),"forks":data.get("forks_count",0),"open_issues":data.get("open_issues_count",0),"size_kb":data.get("size",0),"created_at":data.get("created_at"),"updated_at":data.get("updated_at"),"pushed_at":data.get("pushed_at"),"homepage":data.get("homepage"),"license":(data.get("license") or {}).get("spdx_id"),"topics":data.get("topics",[]),"owner":(data.get("owner") or {}).get("login"),"permissions":data.get("permissions",{}),"html_url":data.get("html_url")}
+
+
+async def _tree(repository: str, ref: str) -> tuple[list[dict[str, Any]], bool]:
+    commit = await _request(f"/repos/{repository}/commits/{quote(ref, safe='')}")
+    tree_sha = ((commit.get("commit") or {}).get("tree") or {}).get("sha")
+    if not tree_sha: raise RuntimeError(f"Could not resolve Git tree for {repository}@{ref}")
+    data = await _request(f"/repos/{repository}/git/trees/{tree_sha}", {"recursive":"1"})
+    return [{"path":item.get("path"),"mode":item.get("mode"),"type":item.get("type"),"sha":item.get("sha"),"size":item.get("size"),"url":item.get("url")} for item in list(data.get("tree",[]))[:MAX_TREE_ITEMS]], bool(data.get("truncated"))
+
+
+async def _read_file(repository: str, path: str, ref: str) -> dict[str, Any]:
+    data = await _request(f"/repos/{repository}/contents/{quote(path.strip().lstrip('/'), safe='/')}", {"ref":ref})
+    content = data.get("content") or ""
+    if data.get("encoding") == "base64":
+        try: content = base64.b64decode(content).decode("utf-8")
+        except UnicodeDecodeError: return {"path":path,"binary":True,"size":data.get("size")}
+    if len(content) > MAX_FILE_CHARS: content = content[:MAX_FILE_CHARS] + "\n\n[OUTPUT TRUNCATED]"
+    return {"path":path,"size":data.get("size"),"content":content}
+
+
+async def _recent_commits(repository: str, limit: int) -> list[dict[str, Any]]:
+    data = await _request(f"/repos/{repository}/commits", {"per_page":limit})
+    return [{"sha":item.get("sha"),"message":(item.get("commit") or {}).get("message","").split("\n",1)[0],"author":(item.get("author") or {}).get("login") or (item.get("commit") or {}).get("author",{}).get("name"),"date":(item.get("commit") or {}).get("author",{}).get("date"),"html_url":item.get("html_url")} for item in data]
+
+
+async def github_analyze_repository(repository: str, ref: str | None = None, max_files: int = 16, commit_limit: int = 8) -> dict[str, Any]:
+    max_files = max(4, min(max_files, 30)); commit_limit = max(0, min(commit_limit, 20))
+    canonical = await _resolve_repository(repository)
+    metadata = await _repository_metadata(canonical)
+    target_ref = ref or str(metadata.get("default_branch") or "main")
+    tree, partial = await _tree(canonical, target_ref)
+    selected_paths = _select_files(tree, max_files)
+    files: list[dict[str, Any]] = []
+    for path in selected_paths:
+        try: files.append(await _read_file(canonical, path, target_ref))
+        except Exception as error: files.append({"path":path,"error":str(error)})
+    commits = await _recent_commits(canonical, commit_limit) if commit_limit else []
+    return {"repository":metadata,"ref":target_ref,"tree":tree,"tree_count":len(tree),"tree_is_partial":partial,"selected_files":selected_paths,"files":files,"recent_commits":commits,"access":"private-authenticated" if metadata.get("private") else "public","analysis_notes":["Repository identity was resolved from GitHub.","Natural-language names are matched against repositories accessible to the authenticated account before public search fallback.","The Git tree was requested recursively; very large repositories may return a partial tree.","Files were prioritized by documentation, configuration, architecture, and application entry-point relevance.","Use github.file.read or github.code.search for deeper targeted inspection after this dossier."]}
