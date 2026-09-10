@@ -1,4 +1,4 @@
-from core.main import _explicit_repository_from_message, _normalize_repository_context
+from core.main import _explicit_repository_from_message, _looks_like_file_path, _normalize_repository_context
 from core.orchestrator_structured import _extract_repository_target
 
 
@@ -12,6 +12,19 @@ def test_chat_extracts_concatenated_repository_prefix_for_build_request():
     assert _explicit_repository_from_message(
         "Repositorytirth1207/friday commit one simple test/page.tsx"
     ) == "tirth1207/friday"
+
+
+def test_chat_ignores_file_path_before_explicit_repository():
+    assert _explicit_repository_from_message(
+        "commit test/page.tsx in tirth1207/friday"
+    ) == "tirth1207/friday"
+
+
+def test_file_path_guard_matches_common_extensions():
+    assert _looks_like_file_path("test/page.tsx")
+    assert _looks_like_file_path("src/app/page.py")
+    assert not _looks_like_file_path("tirth1207/friday")
+    assert not _looks_like_file_path("tirth1207/AGI_Maze")
 
 
 def test_chat_extracts_normal_repository_prefix():
