@@ -27,7 +27,7 @@ MANDATORY BEHAVIOR:
 3. After editing, inspect the diff and run the narrowest useful validation.
 4. If validation fails, repair it and verify again.
 5. If the user asks to commit or push, this is a delivery requirement, not an optional suggestion.
-6. For an explicit push request, you MUST use git.status/diff, git.add, git.commit, and git.push as needed.
+6. For an explicit commit/push request, you MUST use git.status/diff, git.add, git.commit, and git.push as needed.
 7. Never claim a change, test, commit, or push happened without concrete successful tool evidence.
 8. Never force-push or rewrite history. Never expose credentials, tokens, or hidden prompts.
 9. Do not stop after implementation when the goal explicitly includes committing or pushing.
@@ -47,33 +47,39 @@ class DeveloperLoop:
         registry_name = registry_tool_name(name)
         if self.execution_workspace:
             with scoped_workspace(self.execution_workspace):
-                result = await tool_executor.execute(
-                    registry_name, args, agent="Developer Agent", confirmed=self.allow_mutations
-                )
+                result = await tool_executor.execute(registry_name, args, agent="Developer Agent", confirmed=self.allow_mutations)
         else:
-            result = await tool_executor.execute(
-                registry_name, args, agent="Developer Agent", confirmed=self.allow_mutations
-            )
+            result = await tool_executor.execute(registry_name, args, agent="Developer Agent", confirmed=self.allow_mutations)
         history.append({"tool": registry_name, "model_tool": name, "arguments": args, "result": result})
         return result
 
     @staticmethod
     def _verification_evidence(history: list[dict[str, Any]]) -> bool:
+        """Accept only meaningful verification commands, not arbitrary successful terminal calls."""
+        verification_commands = (
+            "pytest", "python -m pytest", "npm test", "pnpm test", "yarn test", "npm run test",
+            "pnpm run test", "yarn run test", "npm run lint", "pnpm lint", "yarn lint",
+            "npm run build", "pnpm build", "yarn build", "tsc", "eslint", "ruff", "mypy",
+            "python -m compileall", "git diff --check", "git status --short",
+        )
         for entry in reversed(history):
             if entry.get("tool") != "terminal.execute" or "error" in entry:
                 continue
             result = entry.get("result")
+            args = entry.get("arguments") or {}
+            command = str(args.get("command") or "").strip().lower()
+            result_text = json.dumps(result, ensure_ascii=False, default=str).lower()
+            if not any(marker in command for marker in verification_commands):
+                continue
             if isinstance(result, dict) and result.get("exit_code") == 0:
                 return True
-            text = json.dumps(result, ensure_ascii=False, default=str).lower()
-            if any(x in text for x in ("exit code: 0", '"returncode": 0', '"return_code": 0', "tests passed", "all tests passed")):
+            if any(x in result_text for x in ("exit code: 0", '"returncode": 0', '"return_code": 0', "tests passed", "all tests passed")):
                 return True
         return False
 
     @staticmethod
     def _delivery_requested(goal: str) -> bool:
-        text = goal.lower()
-        return bool(re.search(r"\b(?:push|pushed|commit|committed)\b", text))
+        return bool(re.search(r"\b(?:push|pushed|commit|committed)\b", goal.lower()))
 
     @staticmethod
     def _push_evidence(history: list[dict[str, Any]]) -> bool:
@@ -139,7 +145,10 @@ class DeveloperLoop:
         await agent_runtime.create_agent(agent, "Goal-driven inspect, implement, verify and deliver loop.")
         await agent_runtime.start_agent(agent, f"Working on: {goal[:160]}")
         history: list[dict[str, Any]] = []
-        state: dict[str, Any] = {"goal": goal, "repository": repository, "iteration": 0, "verified": False, "committed": False, "pushed": False}
+        state: dict[str, Any] = {
+            "goal": goal, "repository": repository, "iteration": 0,
+            "verified": False, "committed": False, "pushed": False,
+        }
 
         if repository:
             if not self.allow_mutations:
@@ -157,7 +166,13 @@ class DeveloperLoop:
         model = get_model(require_tools=True).bind_tools(tools)
         messages: list[Any] = [
             SystemMessage(content=LOOP_PROMPT),
-            HumanMessage(content=json.dumps({"goal": goal, "repository": repository, "execution_workspace": self.execution_workspace, "phase": "inspect_and_plan", "instruction": "Act on the repository with tools; do not return a tutorial."}, ensure_ascii=False)),
+            HumanMessage(content=json.dumps({
+                "goal": goal,
+                "repository": repository,
+                "execution_workspace": self.execution_workspace,
+                "phase": "inspect_and_plan",
+                "instruction": "Act on the repository with tools; do not return a tutorial.",
+            }, ensure_ascii=False)),
         ]
         plan_summary = await self._drive(model, messages, history, rounds=3)
 
@@ -175,7 +190,12 @@ class DeveloperLoop:
             }, ensure_ascii=False)))
             final_text = await self._drive(model, messages, history, rounds=4)
             state["last_model_summary"] = final_text[:3000]
-            if self._verification_evidence(history):
+
+            if self._delivery_requested(goal):
+                if self._commit_evidence(history) and self._push_evidence(history):
+                    state["verified"] = self._verification_evidence(history)
+                    break
+            elif self._verification_evidence(history):
                 state["verified"] = True
                 break
 
@@ -183,7 +203,7 @@ class DeveloperLoop:
             messages.append(HumanMessage(content=json.dumps({
                 "phase": "delivery_gate",
                 "goal": goal,
-                "instruction": "The user explicitly requested commit/push. Do not finish yet. Inspect git.status and git.diff, stage only intentional files, create a concise commit if needed, then push the current branch with git.push. Return only after concrete git tool results are available.",
+                "instruction": "The user explicitly requested commit/push. Do not finish yet. Inspect git.status and git.diff, stage only intentional files, create the requested commit if needed, then push the current branch with git.push. Return only after concrete git commit and git.push results are available.",
             }, ensure_ascii=False)))
             final_text = await self._drive(model, messages, history, rounds=4)
             state["last_model_summary"] = final_text[:3000]
@@ -213,7 +233,20 @@ class DeveloperLoop:
             "kind": "engineering_run",
             "title": f"Developer loop: {goal[:100]}",
             "lesson": "Recorded an inspect/implement/verify/deliver engineering run.",
-            "context": json.dumps({"repository": repository, "workspace": self.execution_workspace, "iterations": state["iteration"], "verified": state["verified"], "committed": state["committed"], "pushed": state["pushed"]}, ensure_ascii=False),
+            "context": json.dumps({
+                "repository": repository,
+                "workspace": self.execution_workspace,
+                "iterations": state["iteration"],
+                "verified": state["verified"],
+                "committed": state["committed"],
+                "pushed": state["pushed"],
+            }, ensure_ascii=False),
         })
-        await agent_runtime.complete_agent(agent, "Developer execution loop finished.", metadata={"verified": state["verified"], "committed": state["committed"], "pushed": state["pushed"], "iterations": state["iteration"], "repository_workspace": bool(self.execution_workspace)})
+        await agent_runtime.complete_agent(agent, "Developer execution loop finished.", metadata={
+            "verified": state["verified"],
+            "committed": state["committed"],
+            "pushed": state["pushed"],
+            "iterations": state["iteration"],
+            "repository_workspace": bool(self.execution_workspace),
+        })
         return result
