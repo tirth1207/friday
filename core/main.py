@@ -1,4 +1,6 @@
+import asyncio
 import re
+import sys
 
 from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,6 +17,9 @@ from core.github_repositories import list_selectable_repositories
 from core.memory import memory_store
 from core.orchestrator_structured import ask_friday
 from services.api.websocket import friday_websocket
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 app = FastAPI(title="FRIDAY", description="Personal AI Operating Layer", version="0.3.0")
 app.add_middleware(
@@ -33,6 +38,13 @@ class RepositoryContextRequest(BaseModel):
     repository: str | None = None
 
 
+_FILE_EXTENSION_RE = re.compile(r"\.[A-Za-z0-9]{1,6}$")
+
+
+def _looks_like_file_path(candidate: str) -> bool:
+    return bool(_FILE_EXTENSION_RE.search(candidate.rsplit("/", 1)[-1]))
+
+
 def _normalize_repository_context(value: str | None) -> str | None:
     """Normalize repository labels that may come from the UI/chat transcript."""
     if not value:
@@ -44,12 +56,15 @@ def _normalize_repository_context(value: str | None) -> str | None:
 
 
 def _explicit_repository_from_message(message: str) -> str | None:
-    """Extract an explicit owner/name while tolerating the UI's concatenated Repository prefix."""
+    """Extract an explicit owner/name while ignoring file paths such as test/page.tsx."""
     text = (message or "").strip()
     normalized = re.sub(r"^repository\s*[:\-]?\s*", "", text, flags=re.IGNORECASE)
     normalized = re.sub(r"^repository(?=[A-Za-z0-9_.-]+/)", "", normalized, flags=re.IGNORECASE)
-    match = re.search(r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b", normalized, re.IGNORECASE)
-    return match.group(1).removesuffix(".git") if match else None
+    for match in re.finditer(r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b", normalized, re.IGNORECASE):
+        candidate = match.group(1).removesuffix(".git")
+        if not _looks_like_file_path(candidate):
+            return candidate
+    return None
 
 
 def _is_explicit_build_request(message: str) -> bool:
