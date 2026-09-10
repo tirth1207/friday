@@ -44,8 +44,24 @@ def _normalize_repository_context(value: str | None) -> str | None:
 
 
 def _explicit_repository_from_message(message: str) -> str | None:
-    text = message or ""
-    match = re.search(r"(?:\brepository\b\s*[:\-]?\s*)?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b", text, re.IGNORECASE)
+    """Extract an explicit owner/name while tolerating the UI's concatenated Repository prefix."""
+    text = (message or "").strip()
+
+    # The UI can prepend the selected repository as `Repositoryowner/name` with no
+    # separator. Strip that label before parsing the actual GitHub identity.
+    concatenated = re.match(
+        r"^repository(?P<repository>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b",
+        text,
+        re.IGNORECASE,
+    )
+    if concatenated:
+        return concatenated.group("repository").removesuffix(".git")
+
+    match = re.search(
+        r"(?:\brepository\b\s*[:\-]?\s*)?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b",
+        text,
+        re.IGNORECASE,
+    )
     return match.group(1).removesuffix(".git") if match else None
 
 
@@ -57,7 +73,7 @@ def _is_explicit_build_request(message: str) -> bool:
 
 
 def _provider_error_message(error: Exception) -> str:
-    """Return a diagnosis only when the exception actually came from the provider."""
+    """Return a provider diagnosis only for errors that actually came from the provider."""
     error_text = str(error).strip()
     lowered = error_text.lower()
     error_type = type(error).__name__
