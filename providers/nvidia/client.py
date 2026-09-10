@@ -81,10 +81,16 @@ class FridayAgentModel:
     @staticmethod
     def _is_transient(error: Exception) -> bool:
         text = str(error).lower()
-        if any(token in text for token in ("timeout", "timed out", "rate limit", "too many requests", "429")):
+        if any(token in text for token in (
+            "timeout", "timed out", "rate limit", "too many requests", "429",
+            "internal server error", "service unavailable", "bad gateway",
+        )):
             return True
         status_match = re.search(r"\b(?:status|http)[\s:=]+(5\d\d)\b", text)
-        return bool(status_match)
+        if status_match:
+            return True
+        bracket_match = re.search(r"\[(5\d\d)\]", text)
+        return bool(bracket_match)
 
     async def ainvoke(self, value: Any, config: Any = None, **kwargs: Any):
         payload = self._with_guardrail(value)
