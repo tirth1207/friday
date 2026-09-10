@@ -129,6 +129,14 @@ def _extract_repository_target(message: str, resolved_request: str, selected_rep
     # Accept normal and UI-generated forms, including:
     # "Repository tirth1207/AGI_Maze", "Repository:tirth1207/AGI_Maze",
     # and "Repositorytirth1207/AGI_Maze".
+    concatenated = re.match(
+        r"^repository(?P<repository>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b",
+        message or "",
+        re.IGNORECASE,
+    )
+    if concatenated:
+        return concatenated.group("repository").removesuffix(".git")
+
     owner_repo = re.search(
         r"(?:\brepository\b\s*[:\-]?\s*)?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b",
         message or "",
@@ -258,135 +266,3 @@ async def _run_structured_agent(user_message: str, resolved_request: str, recent
         if not isinstance(response, AIMessage):
             response = AIMessage(content=str(getattr(response, "content", response)))
         messages.append(response)
-        tool_calls = list(response.tool_calls or [])
-        if not tool_calls:
-            pseudo_call = _extract_pseudo_tool_call(response.content)
-            if pseudo_call:
-                pseudo_name, pseudo_args = pseudo_call
-                if request_repository and pseudo_name.startswith("github."):
-                    pseudo_args = dict(pseudo_args)
-                    pseudo_args["repository"] = request_repository
-                try:
-                    result, _ = await _execute_structured_tool(pseudo_name, pseudo_args, tool_by_model_name, history)
-                    messages.append(ToolMessage(content=serialize_tool_result(result), tool_call_id=f"compat-{len(history)}"))
-                    continue
-                except Exception as error:
-                    messages.append(ToolMessage(content=f"Tool execution failed: {error}", tool_call_id=f"compat-{len(history)+1}"))
-                    continue
-            return _clean_model_answer(response.content)
-        for call in tool_calls:
-            model_tool_name = str(call.get("name", ""))
-            arguments = call.get("args") or {}
-            if not isinstance(arguments, dict):
-                arguments = {}
-            if request_repository and model_tool_name.startswith("github."):
-                arguments = dict(arguments)
-                arguments["repository"] = request_repository
-            try:
-                result, _ = await _execute_structured_tool(model_tool_name, arguments, tool_by_model_name, history)
-                messages.append(ToolMessage(content=serialize_tool_result(result), tool_call_id=call.get("id") or model_tool_name))
-            except Exception as error:
-                messages.append(ToolMessage(content=f"Tool execution failed: {error}", tool_call_id=call.get("id") or model_tool_name))
-    fallback = await get_model(require_tools=False).ainvoke([
-        SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(content=(
-            "Give a complete final answer using this specialist execution history. "
-            "Do not output tool JSON, planning notes, or reasoning.\n\n"
-            f"Request: {user_message}\n\nHistory:\n{_compact_history(history)}"
-        )),
-    ])
-    return _clean_model_answer(getattr(fallback, "content", fallback))
-
-
-async def _run_github_repository_agent(user_message: str, resolved_request: str, selected_repository: str | None = None) -> str | None:
-    target = _extract_repository_target(user_message, resolved_request, selected_repository)
-    if not target:
-        return None
-    github_agent = GitHubAgent()
-    await github_agent.create()
-    await github_agent.start(f"Inspecting repository {target}")
-    dossier = await github_analyze_repository(target, max_files=18, commit_limit=8)
-    await github_agent.complete(
-        f"Repository evidence collected for {dossier.get('repository', {}).get('full_name', target)}",
-        metadata={"tree_count": dossier.get("tree_count", 0), "files": len(dossier.get("files", []))},
-    )
-    synthesis_payload = {
-        "repository": dossier.get("repository"),
-        "ref": dossier.get("ref"),
-        "tree_count": dossier.get("tree_count"),
-        "tree_is_partial": dossier.get("tree_is_partial"),
-        "tree_paths": [item.get("path") for item in dossier.get("tree", [])],
-        "selected_files": dossier.get("files", []),
-        "recent_commits": dossier.get("recent_commits", []),
-        "analysis_notes": dossier.get("analysis_notes", []),
-    }
-    try:
-        evidence = json.dumps(synthesis_payload, ensure_ascii=False, default=str)[:_MAX_CONTEXT_CHARS]
-        synthesis = await get_model(require_tools=False).ainvoke([
-            SystemMessage(content=(
-                "You are FRIDAY's senior GitHub analyst. Produce the final answer only, never your private "
-                "reasoning or drafting process. Produce a complete but focused repository explanation from the "
-                "supplied evidence. Cover: purpose, main features, users/use cases, architecture, technologies, "
-                "important directories/files, request/data flow, integrations, auth/security, deployment, testing, "
-                "and notable risks/gaps. Use Markdown headings and bullets. Do not stop halfway. Target 1000-1600 words. "
-                "If evidence is missing, explicitly say it was not verified. Never invent facts and never expose secrets."
-            )),
-            HumanMessage(content=f"User request: {user_message}\nSelected repository: {target}\n\nGitHub evidence:\n{evidence}"),
-        ])
-        content = getattr(synthesis, "content", synthesis)
-        if isinstance(content, str) and content.strip():
-            return _clean_model_answer(content)
-    except Exception as error:
-        print(f"[FRIDAY] GitHub evidence collected but NVIDIA synthesis failed: {error}")
-    return _format_repository_dossier_fallback(dossier)
-
-
-async def ask_friday(message: str, repository: str | None = None) -> str:
-    context = resolve_request(message)
-    resolved_request = context["resolved_request"]
-    recent_messages = context["recent_messages"]
-    memory_store.add_message("user", message)
-    if not is_tool_required(resolved_request):
-        response = await answer_conversationally(message, recent_messages)
-        memory_store.add_message("assistant", response)
-        return response
-
-    await agent_runtime.emit(event_type="thinking", title="Understanding request", description="FRIDAY is selecting and coordinating specialist agents. Internal reasoning remains private; only execution progress is shown in the trace.", status="running")
-
-    if _is_environment_key_request(resolved_request):
-        try:
-            result = await _execute_github_tool("github.file.read", {"repository": "tirth1207/friday", "path": ".env.example"}, "Reading .env.example to identify required environment keys")
-            response = _format_env_key_result(result)
-        except Exception as error:
-            response = f"I couldn't read the repository's `.env.example`: {error}"
-        memory_store.add_message("assistant", response)
-        return response
-
-    if _is_github_repository_list_request(resolved_request):
-        try:
-            result = await _execute_github_tool("github.repositories", {"limit": 100, "sort": "pushed", "page": 1}, "Fetching GitHub repositories")
-            response = _format_repository_list(result if isinstance(result, list) else [])
-        except Exception as error:
-            response = f"I couldn't fetch your GitHub repositories: {error}"
-        memory_store.add_message("assistant", response)
-        return response
-
-    if re.search(r"\b(?:explain|describe|analyze|analyse|understand|overview)\b", resolved_request, re.IGNORECASE) and re.search(r"\b(?:repo|repository|project|codebase)\b", resolved_request, re.IGNORECASE):
-        try:
-            github_response = await _run_github_repository_agent(message, resolved_request, selected_repository=repository)
-            if github_response:
-                memory_store.add_message("assistant", github_response)
-                return github_response
-        except Exception as error:
-            print(f"[FRIDAY] GitHub Agent failed: {error}")
-            response = f"I couldn't inspect the requested GitHub repository: {error}"
-            memory_store.add_message("assistant", response)
-            return response
-
-    try:
-        response = await _run_structured_agent(message, resolved_request, recent_messages, selected_repository=repository)
-    except Exception as error:
-        print(f"[FRIDAY] Structured supervisor failed: {error}")
-        response = f"I couldn't complete the request right now. The provider returned: {error}"
-    memory_store.add_message("assistant", response)
-    return response
