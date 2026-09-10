@@ -40,17 +40,34 @@ def _explicit_repository_from_message(message: str) -> str | None:
 
 
 def _is_explicit_build_request(message: str) -> bool:
-    """Detect direct engineering commands without hijacking normal coding questions."""
     text = (message or "").strip().lower()
-    action = re.search(
-        r"\b(build|implement|finish|complete|fix|repair|refactor|write|create|make|add|remove|replace|update|ship)\b",
-        text,
-    )
-    target = re.search(
-        r"\b(code|feature|project|repo|repository|bug|issue|file|component|frontend|backend|api|app|application|function|test|implementation|improvement|change)\b",
-        text,
-    )
+    action = re.search(r"\b(build|implement|finish|complete|fix|repair|refactor|write|create|make|add|remove|replace|update|ship)\b", text)
+    target = re.search(r"\b(code|feature|project|repo|repository|bug|issue|file|component|frontend|backend|api|app|application|function|test|implementation|improvement|change)\b", text)
     return bool(action and target)
+
+
+def _provider_error_message(error: Exception) -> str:
+    """Turn provider/client exceptions into a useful user-facing diagnosis."""
+    error_text = str(error).strip()
+    lowered = error_text.lower()
+    error_type = type(error).__name__
+
+    if "nvidia_api_key" in lowered or "api key" in lowered or "invalid api key" in lowered:
+        return "FRIDAY is configured, but the NVIDIA API key is missing or invalid. Set NVIDIA_API_KEY in the backend .env and restart FRIDAY."
+    if "401" in lowered or "403" in lowered or "unauthorized" in lowered or "forbidden" in lowered:
+        return "FRIDAY reached NVIDIA, but authentication was rejected. Check NVIDIA_API_KEY and make sure the key is active at NVIDIA's API dashboard."
+    if "404" in lowered and ("model" in lowered or "nvidia" in lowered):
+        return "FRIDAY reached NVIDIA, but the configured model was not found or is unavailable to this key. Check the NVIDIA model configuration."
+    if "429" in lowered or "rate limit" in lowered or "too many requests" in lowered:
+        return "FRIDAY reached NVIDIA, but the provider is rate-limiting this key/model. Retry shortly; the backend now retries transient provider failures automatically."
+    if "timeout" in lowered or "timed out" in lowered:
+        return "FRIDAY reached NVIDIA, but the provider request timed out. The backend retries transient failures automatically; try again if it persists."
+    if "connection" in lowered or "connect" in lowered or "dns" in lowered:
+        return "FRIDAY could not connect to the NVIDIA endpoint. Check the backend network connection and NVIDIA endpoint configuration."
+
+    # Keep the generic message only as a final fallback, but include the exception type
+    # so server logs can be correlated without exposing credentials or hidden prompts.
+    return f"FRIDAY's NVIDIA provider request failed ({error_type}). Check the backend logs for the exact provider response and retry."
 
 
 @app.on_event("startup")
@@ -192,24 +209,8 @@ async def chat(request: ChatRequest):
         response = await ask_friday(request.message, repository=repository)
         return {"response": response, "repository": repository}
     except Exception as error:
-        print(f"[FRIDAY] Chat error: {error}")
-        error_text = str(error).strip()
-        lowered = error_text.lower()
-        if "nvidia_api_key" in lowered or "api key" in lowered:
-            user_message = "FRIDAY is configured, but the NVIDIA API key is missing or invalid. Check NVIDIA_API_KEY in the backend .env and restart FRIDAY."
-        elif "timeout" in lowered or "timed out" in lowered:
-            user_message = "FRIDAY reached the AI provider, but the request timed out. Try again, or reduce the request size if this is a large repository operation."
-        elif "401" in lowered or "403" in lowered or "unauthorized" in lowered or "forbidden" in lowered:
-            user_message = "FRIDAY reached the AI provider, but authentication was rejected. Check the NVIDIA API key and model access configured for this deployment."
-        elif "404" in lowered and ("model" in lowered or "nvidia" in lowered):
-            user_message = "FRIDAY reached NVIDIA, but the configured model was not found or is not available to this API key. Check the NVIDIA model configuration."
-        elif "429" in lowered or "rate limit" in lowered:
-            user_message = "FRIDAY is temporarily rate-limited by the AI provider. Please retry shortly."
-        elif "connection" in lowered or "connect" in lowered:
-            user_message = "FRIDAY could not connect to the AI provider. Check the backend network connection and NVIDIA endpoint configuration."
-        else:
-            user_message = "FRIDAY could not complete that request. The backend returned an AI/provider error; check the server logs for the exact cause and try again."
-        return {"response": user_message, "error": error_text, "status": "ai_unavailable"}
+        print(f"[FRIDAY] Chat error: {type(error).__name__}: {error}")
+        return {"response": _provider_error_message(error), "error": str(error).strip(), "error_type": type(error).__name__, "status": "ai_unavailable"}
 
 
 @app.websocket("/ws")
