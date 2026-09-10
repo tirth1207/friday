@@ -46,22 +46,9 @@ def _normalize_repository_context(value: str | None) -> str | None:
 def _explicit_repository_from_message(message: str) -> str | None:
     """Extract an explicit owner/name while tolerating the UI's concatenated Repository prefix."""
     text = (message or "").strip()
-
-    # The UI can prepend the selected repository as `Repositoryowner/name` with no
-    # separator. Strip that label before parsing the actual GitHub identity.
-    concatenated = re.match(
-        r"^repository(?P<repository>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b",
-        text,
-        re.IGNORECASE,
-    )
-    if concatenated:
-        return concatenated.group("repository").removesuffix(".git")
-
-    match = re.search(
-        r"(?:\brepository\b\s*[:\-]?\s*)?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b",
-        text,
-        re.IGNORECASE,
-    )
+    normalized = re.sub(r"^repository\s*[:\-]?\s*", "", text, flags=re.IGNORECASE)
+    normalized = re.sub(r"^repository(?=[A-Za-z0-9_.-]+/)", "", normalized, flags=re.IGNORECASE)
+    match = re.search(r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b", normalized, re.IGNORECASE)
     return match.group(1).removesuffix(".git") if match else None
 
 
@@ -77,7 +64,6 @@ def _provider_error_message(error: Exception) -> str:
     error_text = str(error).strip()
     lowered = error_text.lower()
     error_type = type(error).__name__
-
     provider_markers = (
         "nvidia", "chatnvidia", "integrate.api.nvidia.com", "nvidia_api_key",
         "api key", "rate limit", "too many requests", "429", "401", "403",
@@ -85,7 +71,6 @@ def _provider_error_message(error: Exception) -> str:
     )
     if not any(marker in lowered for marker in provider_markers):
         return f"FRIDAY's Developer Agent failed ({error_type}): {error_text or 'unknown backend error'}"
-
     if "nvidia_api_key" in lowered or "api key" in lowered or "invalid api key" in lowered:
         return "FRIDAY is configured, but the NVIDIA API key is missing or invalid. Set NVIDIA_API_KEY in the backend .env and restart FRIDAY."
     if "401" in lowered or "403" in lowered or "unauthorized" in lowered or "forbidden" in lowered:
@@ -229,8 +214,11 @@ async def chat(request: ChatRequest):
             response = (
                 "## Developer Agent\n\n"
                 f"{result.get('summary', 'Engineering loop completed.')}\n\n"
+                f"- Repository: `{result.get('repository') or repository or 'workspace'}`\n"
                 f"- Iterations: `{result.get('iterations', 0)}`\n"
                 f"- Verified: `{result.get('verified', False)}`\n"
+                f"- Committed: `{result.get('committed', False)}`\n"
+                f"- Pushed: `{result.get('pushed', False)}`\n"
                 f"- Changes enabled: `{result.get('mutations_enabled', True)}`"
             )
             memory_store.add_message("user", request.message)
