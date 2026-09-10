@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+import asyncio
+import re
 from typing import Any
 
 from langchain_core.messages import SystemMessage
@@ -9,6 +13,7 @@ from .config import settings
 
 
 DEFAULT_HOSTED_MODEL = "nvidia/nemotron-3-super-120b-a12b"
+_PROVIDER_RETRIES = 2
 
 AGENT_GUARDRAIL = """
 You are FRIDAY, an execution-capable AI agent, not a generic chatbot.
@@ -22,7 +27,6 @@ Speak as an engineering agent: report what you inspected, what you changed, what
 
 
 def _profile_message() -> SystemMessage:
-    """Build a compact, unconditional user-profile context message."""
     try:
         digest = memory_store.profile_digest(limit=8)
     except Exception as error:
@@ -37,7 +41,6 @@ def _profile_message() -> SystemMessage:
 
 
 def _skill_message(value: Any) -> SystemMessage:
-    """Select and progressively load relevant installed skills for this model call."""
     try:
         if isinstance(value, list):
             parts = []
@@ -62,13 +65,7 @@ def _skill_message(value: Any) -> SystemMessage:
 
 
 class FridayAgentModel:
-    """Small model adapter that keeps FRIDAY's execution identity consistent.
-
-    Every model invocation receives execution guardrails, user-profile context,
-    and automatically selected skill context. Skill instructions are loaded only
-    after metadata-based matching so a large community library does not consume
-    the context window on every request.
-    """
+    """NVIDIA model adapter with FRIDAY guardrails and transient-error recovery."""
 
     def __init__(self, model: Any):
         self._model = model
@@ -81,8 +78,26 @@ class FridayAgentModel:
             return [SystemMessage(content=AGENT_GUARDRAIL), profile, skills, *value]
         return [SystemMessage(content=AGENT_GUARDRAIL), profile, skills, value]
 
+    @staticmethod
+    def _is_transient(error: Exception) -> bool:
+        text = str(error).lower()
+        if any(token in text for token in ("timeout", "timed out", "rate limit", "too many requests", "429")):
+            return True
+        status_match = re.search(r"\b(?:status|http)[\s:=]+(5\d\d)\b", text)
+        return bool(status_match)
+
     async def ainvoke(self, value: Any, config: Any = None, **kwargs: Any):
-        return await self._model.ainvoke(self._with_guardrail(value), config=config, **kwargs)
+        payload = self._with_guardrail(value)
+        last_error: Exception | None = None
+        for attempt in range(_PROVIDER_RETRIES + 1):
+            try:
+                return await self._model.ainvoke(payload, config=config, **kwargs)
+            except Exception as error:
+                last_error = error
+                if attempt >= _PROVIDER_RETRIES or not self._is_transient(error):
+                    raise
+                await asyncio.sleep(1.5 * (attempt + 1))
+        raise last_error or RuntimeError("NVIDIA provider request failed")
 
     def invoke(self, value: Any, config: Any = None, **kwargs: Any):
         return self._model.invoke(self._with_guardrail(value), config=config, **kwargs)
@@ -96,13 +111,7 @@ def _is_hosted() -> bool:
 
 
 def get_model(require_tools: bool = False):
-    """Create the NVIDIA model used by FRIDAY.
-
-    FRIDAY keeps model reasoning private: Nemotron's thinking mode is disabled for
-    user-facing generations, while the UI receives explicit execution events for
-    agent/tool progress. A larger generation budget also prevents long repository
-    explanations from being cut off.
-    """
+    """Create the NVIDIA model used by FRIDAY."""
     if _is_hosted() and not settings.api_key.strip():
         raise RuntimeError(
             "NVIDIA_API_KEY is missing or empty. Set NVIDIA_API_KEY in FRIDAY's .env before starting the server."
@@ -116,7 +125,7 @@ def get_model(require_tools: bool = False):
         model=model_name,
         api_key=settings.api_key,
         base_url=settings.base_url,
-        temperature=0.2,
+        temperature=1.0,
         max_completion_tokens=8192,
     ).with_thinking_mode(enabled=False)
     return FridayAgentModel(model)
