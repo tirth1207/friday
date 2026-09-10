@@ -159,8 +159,11 @@ class DeveloperLoop:
             state["execution_workspace"] = self.execution_workspace
             await agent_runtime.emit("planning", "Repository workspace ready", "Developer tools are scoped to the isolated repository clone.", agent=agent, status="completed")
 
-        await self._tool("filesystem.list", {"path": "."}, history)
-        await self._tool("git.status", {}, history)
+        for name, args in (("filesystem.list", {"path": "."}), ("git.status", {})):
+            try:
+                await self._tool(name, args, history)
+            except Exception as error:
+                history.append({"tool": name, "arguments": args, "error": str(error)})
 
         tools = [t for t in get_langchain_tools() if registry_tool_name(t.name) in self._focused_tool_names(goal)]
         model = get_model(require_tools=True).bind_tools(tools)
