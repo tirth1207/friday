@@ -21,7 +21,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install test dependencies
-        run: python -m pip install --upgrade pip pytest pytest-asyncio aiohttp pydantic pydantic-settings
+        run: python -m pip install --upgrade pip pytest pytest-asyncio aiohttp httpx pydantic pydantic-settings
       - name: Compile Python sources
         run: python -m compileall -q core tools tests
       - name: Run OSIRIS regression tests
