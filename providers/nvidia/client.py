@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
 from typing import Any
 
@@ -97,7 +98,10 @@ class FridayAgentModel:
         last_error: Exception | None = None
         for attempt in range(_PROVIDER_RETRIES + 1):
             try:
-                return await self._model.ainvoke(payload, config=config, **kwargs)
+                result = self._model.invoke(payload, config=config, **kwargs)
+                if inspect.isawaitable(result):
+                    result = await result
+                return result
             except Exception as error:
                 last_error = error
                 if attempt >= _PROVIDER_RETRIES or not self._is_transient(error):
