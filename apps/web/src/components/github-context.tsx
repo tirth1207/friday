@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Check, ChevronRight, Github, Plus, X } from "lucide-react";
+import { Check, ChevronRight,Globe as Github, Plus, X } from "lucide-react";
 
 const API = process.env.NEXT_PUBLIC_FRIDAY_API_URL || "http://127.0.0.1:8000";
 const STORAGE_KEY = "friday.chat.github-context";
