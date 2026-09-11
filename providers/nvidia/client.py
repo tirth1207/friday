@@ -98,7 +98,7 @@ class FridayAgentModel:
         last_error: Exception | None = None
         for attempt in range(_PROVIDER_RETRIES + 1):
             try:
-                result = self._model.invoke(payload, config=config, **kwargs)
+                result = await asyncio.to_thread(self._model.invoke, payload, config=config, **kwargs)
                 if inspect.isawaitable(result):
                     result = await result
                 return result
