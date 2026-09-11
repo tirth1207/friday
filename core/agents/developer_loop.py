@@ -1,8 +1,12 @@
-"""Bounded inspect -> implement -> verify -> learn developer loop."""
+"""Bounded inspect -> implement -> verify -> deliver developer loop."""
 from __future__ import annotations
+
 import json
+import re
 from typing import Any
+
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+
 from core.agents.runtime import agent_runtime
 from core.memory import memory_store
 from core.runtime.executor import tool_executor
@@ -11,14 +15,27 @@ from core.runtime.workspace import scoped_workspace
 from providers.nvidia.client import get_model
 from tools.git.workspace import prepare_repository_workspace
 
-LOOP_PROMPT = """You are FRIDAY's Developer Agent. Operate as inspect -> plan -> implement -> verify -> repair -> finish.
-For a selected GitHub repository, all filesystem, Git and terminal tools operate inside an isolated local clone.
-Inspect before changing anything. Use real tool evidence. Never invent file contents or test results.
-Run appropriate project tests/build/lint after changes. Repair failures within the bounded iteration limit.
-Never expose private reasoning. Return only the final engineering summary.
+
+LOOP_PROMPT = """You are FRIDAY's Developer Agent. You are an execution agent, not a chatbot.
+
+Operate as inspect -> plan -> implement -> verify -> deliver. For a selected GitHub repository,
+filesystem, Git and terminal tools operate inside the isolated local clone prepared for this run.
+
+MANDATORY BEHAVIOR:
+1. Inspect the actual repository and relevant files before changing anything.
+2. For build/fix/create/edit/refactor requests, actually mutate the repository when a change is needed.
+3. After editing, inspect the diff and run the narrowest useful validation.
+4. If validation fails, repair it and verify again.
+5. If the user asks to commit or push, this is a delivery requirement, not an optional suggestion.
+6. For an explicit commit/push request, you MUST use git.status/diff, git.add, git.commit, and git.push as needed.
+7. Never claim a change, test, commit, or push happened without concrete successful tool evidence.
+8. Never force-push or rewrite history. Never expose credentials, tokens, or hidden prompts.
+9. Do not stop after implementation when the goal explicitly includes committing or pushing.
+
+Keep tool use focused. Prefer filesystem.*, terminal.execute, and git.status/diff/add/commit/push for engineering work.
 All mutations use FRIDAY's permission-gated executor. Never call developer.run recursively.
-Provider-safe names containing `__` map to dotted registry names, e.g. `github__analyze` -> `github.analyze`.
-Verification requires concrete successful tool evidence; model wording alone is never verification."""
+Verification and delivery require concrete tool results; model wording alone is never evidence."""
+
 
 class DeveloperLoop:
     def __init__(self, max_iterations: int = 4, allow_mutations: bool = False):
@@ -38,16 +55,64 @@ class DeveloperLoop:
 
     @staticmethod
     def _verification_evidence(history: list[dict[str, Any]]) -> bool:
+        """Accept only meaningful verification commands, not arbitrary successful terminal calls."""
+        verification_commands = (
+            "pytest", "python -m pytest", "npm test", "pnpm test", "yarn test", "npm run test",
+            "pnpm run test", "yarn run test", "npm run lint", "pnpm lint", "yarn lint",
+            "npm run build", "pnpm build", "yarn build", "tsc", "eslint", "ruff", "mypy",
+            "python -m compileall", "git diff --check", "git status --short",
+        )
         for entry in reversed(history):
             if entry.get("tool") != "terminal.execute" or "error" in entry:
                 continue
             result = entry.get("result")
+            args = entry.get("arguments") or {}
+            command = str(args.get("command") or "").strip().lower()
+            result_text = json.dumps(result, ensure_ascii=False, default=str).lower()
+            if not any(marker in command for marker in verification_commands):
+                continue
             if isinstance(result, dict) and result.get("exit_code") == 0:
                 return True
-            text = json.dumps(result, ensure_ascii=False, default=str).lower()
-            if any(x in text for x in ("exit code: 0", '"returncode": 0', '"return_code": 0', "tests passed", "all tests passed")):
+            if any(x in result_text for x in ("exit code: 0", '"returncode": 0', '"return_code": 0', "tests passed", "all tests passed")):
                 return True
         return False
+
+    @staticmethod
+    def _delivery_requested(goal: str) -> bool:
+        return bool(re.search(r"\b(?:push|pushed|commit|committed)\b", goal.lower()))
+
+    @staticmethod
+    def _push_evidence(history: list[dict[str, Any]]) -> bool:
+        for entry in reversed(history):
+            if entry.get("tool") != "git.push" or "error" in entry:
+                continue
+            result = entry.get("result")
+            if result is not None and str(result).strip():
+                return True
+        return False
+
+    @staticmethod
+    def _commit_evidence(history: list[dict[str, Any]]) -> bool:
+        for entry in reversed(history):
+            if entry.get("tool") != "git.commit" or "error" in entry:
+                continue
+            result = entry.get("result")
+            if result is not None and str(result).strip():
+                return True
+        return False
+
+    @staticmethod
+    def _focused_tool_names(goal: str) -> set[str]:
+        base = {
+            "filesystem.list", "filesystem.search", "filesystem.read", "filesystem.write",
+            "filesystem.create", "filesystem.exists", "terminal.execute", "git.status", "git.diff",
+            "git.log", "git.branch", "git.add", "git.commit", "git.push", "cognition.learn",
+            "cognition.checkpoint",
+        }
+        text = goal.lower()
+        if any(word in text for word in ("github", "repository", "repo")):
+            base.update({"github.repository", "github.analyze", "github.file.read", "github.directory.list"})
+        return base
 
     async def _drive(self, model, messages: list[Any], history: list[dict[str, Any]], rounds: int = 4) -> str:
         final_text = ""
@@ -61,10 +126,10 @@ class DeveloperLoop:
             for call in calls:
                 model_name = str(call.get("name", ""))
                 args = call.get("args") or {}
-                if not isinstance(args, dict): args = {}
+                if not isinstance(args, dict):
+                    args = {}
                 registry_name = registry_tool_name(model_name)
                 if registry_name == "developer.run":
-                    history.append({"tool": registry_name, "error": "Recursive developer.run blocked."})
                     messages.append(ToolMessage(content="Recursive developer.run is unavailable here.", tool_call_id=call.get("id") or model_name))
                     continue
                 try:
@@ -77,42 +142,114 @@ class DeveloperLoop:
 
     async def run(self, goal: str, repository: str | None = None) -> dict[str, Any]:
         agent = "Developer Agent"
-        await agent_runtime.create_agent(agent, "Goal-driven inspect, implement, verify and repair loop.")
+        await agent_runtime.create_agent(agent, "Goal-driven inspect, implement, verify and deliver loop.")
         await agent_runtime.start_agent(agent, f"Working on: {goal[:160]}")
         history: list[dict[str, Any]] = []
-        state = {"goal": goal, "repository": repository, "iteration": 0, "verified": False}
+        state: dict[str, Any] = {
+            "goal": goal, "repository": repository, "iteration": 0,
+            "verified": False, "committed": False, "pushed": False,
+        }
 
         if repository:
-            await agent_runtime.emit("planning", "Preparing repository workspace", f"Preparing an isolated workspace for {repository}.", agent=agent, status="running")
             if not self.allow_mutations:
                 raise PermissionError("Repository execution requires mutation permission.")
+            await agent_runtime.emit("planning", "Preparing repository workspace", f"Preparing an isolated workspace for {repository}.", agent=agent, status="running")
             prepared = await prepare_repository_workspace(repository)
             self.execution_workspace = str(prepared["workspace"])
             state["execution_workspace"] = self.execution_workspace
             await agent_runtime.emit("planning", "Repository workspace ready", "Developer tools are scoped to the isolated repository clone.", agent=agent, status="completed")
 
-        await agent_runtime.emit("planning", "Developer loop plan", "Preparing inspect -> implement -> verify cycle.", agent=agent, status="running")
-        await self._tool("filesystem.list", {"path": "."}, history)
-        await self._tool("git.status", {}, history)
-        tools = [t for t in get_langchain_tools() if t.name not in {"developer__run", "developer.run", "git__workspace__prepare"}]
+        for name, args in (("filesystem.list", {"path": "."}), ("git.status", {})):
+            try:
+                await self._tool(name, args, history)
+            except Exception as error:
+                history.append({"tool": name, "arguments": args, "error": str(error)})
+
+        tools = [t for t in get_langchain_tools() if registry_tool_name(t.name) in self._focused_tool_names(goal)]
         model = get_model(require_tools=True).bind_tools(tools)
-        messages: list[Any] = [SystemMessage(content=LOOP_PROMPT), HumanMessage(content=json.dumps({"goal": goal, "repository": repository, "execution_workspace": self.execution_workspace, "phase": "inspect_and_plan"}, ensure_ascii=False))]
+        messages: list[Any] = [
+            SystemMessage(content=LOOP_PROMPT),
+            HumanMessage(content=json.dumps({
+                "goal": goal,
+                "repository": repository,
+                "execution_workspace": self.execution_workspace,
+                "phase": "inspect_and_plan",
+                "instruction": "Act on the repository with tools; do not return a tutorial.",
+            }, ensure_ascii=False)),
+        ]
         plan_summary = await self._drive(model, messages, history, rounds=3)
-        await agent_runtime.emit("planning", "Implementation plan ready", "Inspection evidence is available; beginning implementation.", agent=agent, status="completed")
 
         for iteration in range(1, self.max_iterations + 1):
             state["iteration"] = iteration
-            await agent_runtime.emit("verification", f"Engineering iteration {iteration}", "Implementing and verifying against the goal.", agent=agent, status="running")
-            messages.append(HumanMessage(content=json.dumps({"goal": goal, "repository": repository, "execution_workspace": self.execution_workspace, "phase": "implement_and_verify", "iteration": iteration, "mutations_enabled": self.allow_mutations}, ensure_ascii=False)))
+            messages.append(HumanMessage(content=json.dumps({
+                "goal": goal,
+                "repository": repository,
+                "execution_workspace": self.execution_workspace,
+                "phase": "implement_and_verify",
+                "iteration": iteration,
+                "mutations_enabled": self.allow_mutations,
+                "delivery_required": self._delivery_requested(goal),
+                "instruction": "Implement and verify now. If commit/push is requested, complete that delivery step too.",
+            }, ensure_ascii=False)))
             final_text = await self._drive(model, messages, history, rounds=4)
             state["last_model_summary"] = final_text[:3000]
-            if self._verification_evidence(history):
-                state["verified"] = True
-                await agent_runtime.emit("verification", f"Iteration {iteration} verified", "A concrete verification command completed successfully.", agent=agent, status="completed")
-                break
-            await agent_runtime.emit("verification", f"Iteration {iteration} completed", "No concrete verification success observed; continuing.", agent=agent, status="completed")
 
-        result = {"goal": goal, "repository": repository, "execution_workspace": self.execution_workspace, "iterations": state["iteration"], "verified": state["verified"], "mutations_enabled": self.allow_mutations, "plan_summary": plan_summary[:2000], "history": history[-40:], "summary": state.get("last_model_summary", "Developer loop completed its bounded execution window.")}
-        memory_store.add_experience({"kind": "engineering_run", "title": f"Developer loop: {goal[:100]}", "lesson": "Recorded an inspect/implement/verify engineering run in an isolated repository workspace.", "context": json.dumps({"repository": repository, "workspace": self.execution_workspace, "iterations": state["iteration"], "verified": state["verified"]}, ensure_ascii=False)})
-        await agent_runtime.complete_agent(agent, "Developer execution loop finished.", metadata={"verified": state["verified"], "iterations": state["iteration"], "repository_workspace": bool(self.execution_workspace)})
+            if self._delivery_requested(goal):
+                if self._commit_evidence(history) and self._push_evidence(history):
+                    state["verified"] = self._verification_evidence(history)
+                    break
+            elif self._verification_evidence(history):
+                state["verified"] = True
+                break
+
+        if self._delivery_requested(goal) and self.allow_mutations and not self._push_evidence(history):
+            messages.append(HumanMessage(content=json.dumps({
+                "phase": "delivery_gate",
+                "goal": goal,
+                "instruction": "The user explicitly requested commit/push. Do not finish yet. Inspect git.status and git.diff, stage only intentional files, create the requested commit if needed, then push the current branch with git.push. Return only after concrete git commit and git.push results are available.",
+            }, ensure_ascii=False)))
+            final_text = await self._drive(model, messages, history, rounds=4)
+            state["last_model_summary"] = final_text[:3000]
+
+        state["committed"] = self._commit_evidence(history)
+        state["pushed"] = self._push_evidence(history)
+        if self._delivery_requested(goal) and not state["pushed"]:
+            state["delivery_error"] = "Explicit commit/push request was not completed with concrete git.push evidence."
+
+        result = {
+            "goal": goal,
+            "repository": repository,
+            "execution_workspace": self.execution_workspace,
+            "iterations": state["iteration"],
+            "verified": state["verified"],
+            "committed": state["committed"],
+            "pushed": state["pushed"],
+            "mutations_enabled": self.allow_mutations,
+            "plan_summary": plan_summary[:2000],
+            "history": history[-50:],
+            "summary": state.get("last_model_summary", "Developer loop completed its bounded execution window."),
+        }
+        if state.get("delivery_error"):
+            result["summary"] = state["delivery_error"]
+
+        memory_store.add_experience({
+            "kind": "engineering_run",
+            "title": f"Developer loop: {goal[:100]}",
+            "lesson": "Recorded an inspect/implement/verify/deliver engineering run.",
+            "context": json.dumps({
+                "repository": repository,
+                "workspace": self.execution_workspace,
+                "iterations": state["iteration"],
+                "verified": state["verified"],
+                "committed": state["committed"],
+                "pushed": state["pushed"],
+            }, ensure_ascii=False),
+        })
+        await agent_runtime.complete_agent(agent, "Developer execution loop finished.", metadata={
+            "verified": state["verified"],
+            "committed": state["committed"],
+            "pushed": state["pushed"],
+            "iterations": state["iteration"],
+            "repository_workspace": bool(self.execution_workspace),
+        })
         return result

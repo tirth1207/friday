@@ -1,4 +1,6 @@
+import asyncio
 import re
+import sys
 
 from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,6 +17,9 @@ from core.github_repositories import list_selectable_repositories
 from core.memory import memory_store
 from core.orchestrator_structured import ask_friday
 from services.api.websocket import friday_websocket
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 app = FastAPI(title="FRIDAY", description="Personal AI Operating Layer", version="0.3.0")
 app.add_middleware(
@@ -33,24 +38,70 @@ class RepositoryContextRequest(BaseModel):
     repository: str | None = None
 
 
+_FILE_EXTENSION_RE = re.compile(r"\.[A-Za-z0-9]{1,6}$")
+
+
+def _looks_like_file_path(candidate: str) -> bool:
+    return bool(_FILE_EXTENSION_RE.search(candidate.rsplit("/", 1)[-1]))
+
+
+def _normalize_repository_context(value: str | None) -> str | None:
+    """Normalize repository labels that may come from the UI/chat transcript."""
+    if not value:
+        return None
+    normalized = value.strip()
+    normalized = re.sub(r"^repository\s*:\s*", "", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"^repository(?=[A-Za-z0-9_.-]+/)", "", normalized, flags=re.IGNORECASE)
+    return normalized or None
+
+
 def _explicit_repository_from_message(message: str) -> str | None:
-    text = message or ""
-    match = re.search(r"(?:\brepository\b\s*[:\-]?\s*)?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b", text, re.IGNORECASE)
-    return match.group(1).removesuffix(".git") if match else None
+    """Extract an explicit owner/name while ignoring file paths such as test/page.tsx."""
+    text = (message or "").strip()
+    normalized = re.sub(r"^repository\s*[:\-]?\s*", "", text, flags=re.IGNORECASE)
+    normalized = re.sub(r"^repository(?=[A-Za-z0-9_.-]+/)", "", normalized, flags=re.IGNORECASE)
+    for match in re.finditer(r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b", normalized, re.IGNORECASE):
+        candidate = match.group(1).removesuffix(".git")
+        if not _looks_like_file_path(candidate):
+            return candidate
+    return None
 
 
 def _is_explicit_build_request(message: str) -> bool:
-    """Detect direct engineering commands without hijacking normal coding questions."""
     text = (message or "").strip().lower()
-    action = re.search(
-        r"\b(build|implement|finish|complete|fix|repair|refactor|write|create|make|add|remove|replace|update|ship)\b",
-        text,
-    )
-    target = re.search(
-        r"\b(code|feature|project|repo|repository|bug|issue|file|component|frontend|backend|api|app|application|function|test|implementation|improvement|change)\b",
-        text,
-    )
+    action = re.search(r"\b(build|implement|finish|complete|fix|repair|refactor|write|create|make|add|remove|replace|update|ship|commit|push)\b", text)
+    target = re.search(r"\b(code|feature|project|repo|repository|bug|issue|file|component|frontend|backend|api|app|application|function|test|implementation|improvement|change|page)\b", text)
     return bool(action and target)
+
+
+def _provider_error_message(error: Exception) -> str:
+    """Return a provider diagnosis only for errors that actually came from the provider."""
+    error_text = str(error).strip()
+    lowered = error_text.lower()
+    error_type = type(error).__name__
+    provider_markers = (
+        "nvidia", "chatnvidia", "integrate.api.nvidia.com", "nvidia_api_key",
+        "api key", "rate limit", "too many requests", "429", "401", "403",
+        "model not found", "provider", "llm", "completion",
+        "internal server error", "service unavailable", "bad gateway", "500", "502", "503",
+    )
+    if not any(marker in lowered for marker in provider_markers):
+        return f"FRIDAY's Developer Agent failed ({error_type}): {error_text or 'unknown backend error'}"
+    if "nvidia_api_key" in lowered or "api key" in lowered or "invalid api key" in lowered:
+        return "FRIDAY is configured, but the NVIDIA API key is missing or invalid. Set NVIDIA_API_KEY in the backend .env and restart FRIDAY."
+    if "401" in lowered or "403" in lowered or "unauthorized" in lowered or "forbidden" in lowered:
+        return "FRIDAY reached NVIDIA, but authentication was rejected. Check NVIDIA_API_KEY and make sure the key is active."
+    if "404" in lowered and ("model" in lowered or "nvidia" in lowered):
+        return "FRIDAY reached NVIDIA, but the configured model was not found or is unavailable to this key."
+    if "429" in lowered or "rate limit" in lowered or "too many requests" in lowered:
+        return "FRIDAY reached NVIDIA, but the provider is rate-limiting this key/model. Retry shortly."
+    if "500" in lowered or "502" in lowered or "503" in lowered or "internal server error" in lowered or "service unavailable" in lowered:
+        return "FRIDAY reached NVIDIA, but the provider returned a server-side error. This is usually transient — try again in a moment."
+    if "timeout" in lowered or "timed out" in lowered:
+        return "FRIDAY reached NVIDIA, but the provider request timed out."
+    if "connection" in lowered or "connect" in lowered or "dns" in lowered:
+        return "FRIDAY could not connect to the NVIDIA endpoint. Check the backend network connection."
+    return f"FRIDAY's NVIDIA provider request failed ({error_type}): {error_text or 'unknown provider error'}"
 
 
 @app.on_event("startup")
@@ -71,7 +122,6 @@ async def health():
 
 @app.get("/conversations")
 async def conversations(limit: int = 80):
-    # Keep history requests bounded even if an older frontend sends a larger value.
     safe_limit = max(1, min(limit, 80))
     return {"conversations": memory_store.get_conversations(safe_limit)}
 
@@ -136,8 +186,8 @@ async def github_repository_context():
 
 @app.post("/auth/github/repository-context")
 async def github_repository_context_set(request: RepositoryContextRequest):
-    repository = request.repository
-    if repository is None or not repository.strip():
+    repository = _normalize_repository_context(request.repository)
+    if repository is None:
         clear_active_repository(); return {"repository": None}
     try:
         await refresh_connection_if_needed()
@@ -170,7 +220,7 @@ async def chat(request: ChatRequest):
     try:
         await refresh_connection_if_needed()
         explicit_repository = _explicit_repository_from_message(request.message)
-        repository = explicit_repository or (request.repository.strip() if request.repository else None) or get_active_repository()
+        repository = explicit_repository or _normalize_repository_context(request.repository) or _normalize_repository_context(get_active_repository())
         if repository:
             from tools.github.repository_agent import _resolve_repository
             repository = await _resolve_repository(repository)
@@ -182,8 +232,11 @@ async def chat(request: ChatRequest):
             response = (
                 "## Developer Agent\n\n"
                 f"{result.get('summary', 'Engineering loop completed.')}\n\n"
+                f"- Repository: `{result.get('repository') or repository or 'workspace'}`\n"
                 f"- Iterations: `{result.get('iterations', 0)}`\n"
                 f"- Verified: `{result.get('verified', False)}`\n"
+                f"- Committed: `{result.get('committed', False)}`\n"
+                f"- Pushed: `{result.get('pushed', False)}`\n"
                 f"- Changes enabled: `{result.get('mutations_enabled', True)}`"
             )
             memory_store.add_message("user", request.message)
@@ -193,8 +246,8 @@ async def chat(request: ChatRequest):
         response = await ask_friday(request.message, repository=repository)
         return {"response": response, "repository": repository}
     except Exception as error:
-        print(f"[FRIDAY] Chat error: {error}")
-        return {"response": "I couldn't complete that request because the AI service is currently unavailable. Please try again.", "error": str(error)}
+        print(f"[FRIDAY] Chat error: {type(error).__name__}: {error}")
+        return {"response": _provider_error_message(error), "error": str(error).strip(), "error_type": type(error).__name__, "status": "ai_unavailable"}
 
 
 @app.websocket("/ws")

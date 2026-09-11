@@ -1,15 +1,19 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
 class NVIDIASettings(BaseSettings):
-    api_key: str = "mock_key_for_dev"
-    # Nemotron 3 Super is currently documented by NVIDIA as an agentic/tool-calling
-    # model and is available through the free hosted endpoint.
+    # Do not provide a fake credential. Load the real project .env regardless of cwd.
+    api_key: str = ""
     model: str = "nvidia/nemotron-3-super-120b-a12b"
     base_url: str = "https://integrate.api.nvidia.com/v1"
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(PROJECT_ROOT / ".env"),
         env_prefix="NVIDIA_",
         extra="ignore",
     )

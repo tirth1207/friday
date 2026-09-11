@@ -125,13 +125,20 @@ def _extract_pseudo_tool_call(content: Any) -> tuple[str, dict[str, Any]] | None
 def _extract_repository_target(message: str, resolved_request: str, selected_repository: str | None = None) -> str | None:
     """Resolve repository context without allowing stale UI context to win."""
     combined = f"{message}\n{resolved_request}"
+    text = message or ""
 
-    # Accept normal and UI-generated forms, including:
-    # "Repository tirth1207/AGI_Maze", "Repository:tirth1207/AGI_Maze",
-    # and "Repositorytirth1207/AGI_Maze".
+    # The UI can emit the selected repo as `Repositoryowner/name` without a separator.
+    concatenated = re.match(
+        r"^repository(?P<repository>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b",
+        text,
+        re.IGNORECASE,
+    )
+    if concatenated:
+        return concatenated.group("repository").removesuffix(".git")
+
     owner_repo = re.search(
         r"(?:\brepository\b\s*[:\-]?\s*)?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b",
-        message or "",
+        text,
         re.IGNORECASE,
     )
     if owner_repo:
@@ -139,7 +146,7 @@ def _extract_repository_target(message: str, resolved_request: str, selected_rep
 
     explicit_name = re.search(
         r"\b(?:explain|describe|analyze|analyse|understand|overview)\s+(?!this\b|that\b)([A-Za-z0-9_.-]+)\s+(?:repo(?:sitory)?|project|codebase)\b",
-        message,
+        text,
         re.IGNORECASE,
     )
     if explicit_name:
@@ -148,7 +155,7 @@ def _extract_repository_target(message: str, resolved_request: str, selected_rep
 
     my_repo = re.search(
         r"\b(?:my|the)\s+(?!this\b|that\b)([A-Za-z0-9_.-]+)\s+(?:repo(?:sitory)?|project|codebase)\b",
-        message,
+        text,
         re.IGNORECASE,
     )
     if my_repo:

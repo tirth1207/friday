@@ -1,0 +1,40 @@
+/* FRIDAY sidebar theme bridge.
+   The main UI still contains legacy dark utility classes, so scope the light-mode
+   conversion to the actual left sidebar instead of changing the whole workspace. */
+
+html[data-theme="light"] main > aside {
+  background: rgba(255, 255, 255, 0.96) !important;
+  border-color: rgba(15, 23, 42, 0.10) !important;
+  color: #0f172a !important;
+  box-shadow: 8px 0 30px rgba(15, 23, 42, 0.04);
+}
+
+html[data-theme="light"] main > aside .text-white {
+  color: #0f172a !important;
+}
+
+html[data-theme="light"] main > aside [class*="text-white/"] {
+  color: rgba(15, 23, 42, 0.62) !important;
+}
+
+html[data-theme="light"] main > aside [class*="border-white/"] {
+  border-color: rgba(15, 23, 42, 0.10) !important;
+}
+
+html[data-theme="light"] main > aside [class*="bg-white/"] {
+  background-color: rgba(15, 23, 42, 0.035) !important;
+}
+
+html[data-theme="light"] main > aside button:hover,
+html[data-theme="light"] main > aside a:hover {
+  background-color: rgba(15, 23, 42, 0.055) !important;
+}
+
+html[data-theme="light"] main > aside svg {
+  color: rgba(15, 23, 42, 0.52);
+}
+
+html[data-theme="light"] main > aside .text-blue-400,
+html[data-theme="light"] main > aside .text-blue-300 {
+  color: #2563eb !important;
+}
