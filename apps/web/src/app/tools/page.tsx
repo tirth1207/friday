@@ -7,7 +7,6 @@ import {
   Code2,
   FileText,
   FolderOpen,
-  Github,
   Globe,
   Laptop,
   Music2,
@@ -58,7 +57,7 @@ const groups: ToolGroup[] = [
   {
     name: "GitHub",
     description: "Understand and work with accessible GitHub repositories and their code.",
-    icon: Github,
+    icon: Globe,
     tools: [
       { name: "github.profile", description: "Fetch a GitHub profile.", permission: "safe" },
       { name: "github.repositories", description: "List accessible repositories.", permission: "safe" },
