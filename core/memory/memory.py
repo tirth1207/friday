@@ -1,15 +1,19 @@
 import json
 import sqlite3
+from pathlib import Path
 from typing import Any, Optional
 
-from core.runtime.permissions import get_workspace_root
+from core.config import settings
 
 
 class MemoryStore:
     def __init__(self, db_path: Optional[str] = None):
         if not db_path:
-            db_dir = get_workspace_root() / ".friday"
-            db_dir.mkdir(exist_ok=True)
+            # Memory is FRIDAY runtime data, not repository data. Keep it in the
+            # machine-level private runtime so an active repository scope cannot
+            # redirect the database into a cloned project.
+            db_dir = Path(settings.friday_workspace).expanduser().resolve() / "data"
+            db_dir.mkdir(parents=True, exist_ok=True)
             self.db_path = str(db_dir / "friday_memory.db")
         else:
             self.db_path = db_path
@@ -103,7 +107,7 @@ class MemoryStore:
     def recall_profile(self, query: str = "", limit: int = 8) -> list[dict[str, Any]]:
         query = (query or "").strip().lower()
         limit = max(1, min(limit, 20))
-        with self._get_connection() as conn:
+        with sqlite3.connect(self.db_path) as conn:
             rows = conn.execute(
                 "SELECT id, category, fact, source_message, created_at FROM user_profile ORDER BY id DESC LIMIT 500"
             ).fetchall()
@@ -166,7 +170,7 @@ class MemoryStore:
         return [item for _, item in scored[:limit]]
 
     def log_execution(self, agent: str, tool: str, status: str, details: Optional[dict[str, Any]] = None):
-        with self._get_connection() as conn:
+        with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 "INSERT INTO execution_logs (agent, tool, status, details) VALUES (?, ?, ?, ?)",
                 (agent, tool, status, json.dumps(details or {})),
