@@ -5,6 +5,7 @@ import asyncio
 import os
 import subprocess
 from pathlib import Path
+from typing import Any
 
 from core.github_oauth import load_connection, refresh_connection_if_needed
 from core.runtime.permissions import get_workspace_root
@@ -64,7 +65,7 @@ async def run_git(args: list[str]) -> str:
 
 
 async def git_status() -> str:
-    return await run_git(["status"])
+    return await run_git(["status", "--short"])
 
 
 async def git_diff() -> str:
@@ -88,27 +89,66 @@ async def git_add(paths: list[str]) -> str:
         raise ValueError("At least one non-empty path is required for git.add")
     if any(path.startswith("-") for path in cleaned):
         raise ValueError("Git paths may not begin with '-'")
-    return await run_git(["add", "--", *cleaned])
+    await run_git(["add", "--", *cleaned])
+    return json_result({"success": True, "staged": cleaned})
 
 
-async def git_commit(message: str) -> str:
-    """Create a commit from the already-staged changes."""
+async def git_commit(message: str) -> dict[str, Any]:
+    """Create a commit and return concrete commit evidence."""
     message = str(message).strip()
     if not message:
         raise ValueError("Commit message is required")
     if len(message) > 200:
         raise ValueError("Commit message is too long")
-    return await run_git(["commit", "-m", message])
+
+    status = await run_git(["status", "--short"])
+    if not status.strip():
+        return {"success": False, "committed": False, "reason": "No staged or unstaged changes were present."}
+
+    output = await run_git(["commit", "-m", message])
+    commit_sha = (await run_git(["rev-parse", "HEAD"])).strip()
+    return {
+        "success": True,
+        "committed": True,
+        "commit_sha": commit_sha,
+        "message": message,
+        "output": output.strip(),
+    }
 
 
-async def git_push(remote: str = "origin", branch: str | None = None) -> str:
-    """Push the current or explicitly named branch to a configured remote."""
+async def git_push(remote: str = "origin", branch: str | None = None) -> dict[str, Any]:
+    """Push and verify that the remote branch points at the local HEAD."""
     remote = str(remote).strip()
     if not remote or remote.startswith("-"):
         raise ValueError("A valid Git remote is required")
-    if branch is None or not str(branch).strip():
-        return await run_git(["push", remote])
-    branch = str(branch).strip()
-    if branch.startswith("-") or ".." in branch:
+
+    current_branch = (await run_git(["branch", "--show-current"])).strip()
+    target_branch = str(branch).strip() if branch is not None and str(branch).strip() else current_branch
+    if not target_branch or target_branch.startswith("-") or ".." in target_branch:
         raise ValueError("Invalid Git branch name")
-    return await run_git(["push", remote, f"HEAD:{branch}"])
+
+    push_args = ["push", remote, f"HEAD:{target_branch}"]
+    output = await run_git(push_args)
+    local_sha = (await run_git(["rev-parse", "HEAD"])).strip()
+    remote_sha = (await run_git(["ls-remote", remote, f"refs/heads/{target_branch}"])).strip()
+    remote_head = remote_sha.split()[0] if remote_sha else ""
+
+    if not remote_head or remote_head != local_sha:
+        raise RuntimeError(
+            f"Git push returned successfully but remote verification failed: expected {local_sha}, got {remote_head or 'no remote SHA'}."
+        )
+
+    return {
+        "success": True,
+        "pushed": True,
+        "remote": remote,
+        "branch": target_branch,
+        "commit_sha": local_sha,
+        "remote_sha": remote_head,
+        "output": output.strip(),
+    }
+
+
+def json_result(value: dict[str, Any]) -> dict[str, Any]:
+    """Keep the tiny helper explicit for tool-result serialization compatibility."""
+    return value
