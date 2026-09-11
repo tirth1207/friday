@@ -32,6 +32,7 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     message: str
     repository: str | None = None
+    repository_attached: bool = False
 
 
 class RepositoryContextRequest(BaseModel):
@@ -86,7 +87,7 @@ def _provider_error_message(error: Exception) -> str:
         "internal server error", "service unavailable", "bad gateway", "500", "502", "503",
     )
     if not any(marker in lowered for marker in provider_markers):
-        return f"FRIDAY's Developer Agent failed ({error_type}): {error_text or 'unknown backend error'}"
+        return f"FRIDAY request failed ({error_type}): {error_text or 'unknown backend error'}"
     if "nvidia_api_key" in lowered or "api key" in lowered or "invalid api key" in lowered:
         return "FRIDAY is configured, but the NVIDIA API key is missing or invalid. Set NVIDIA_API_KEY in the backend .env and restart FRIDAY."
     if "401" in lowered or "403" in lowered or "unauthorized" in lowered or "forbidden" in lowered:
@@ -256,13 +257,22 @@ async def chat(request: ChatRequest):
     try:
         await refresh_connection_if_needed()
         explicit_repository = _explicit_repository_from_message(request.message)
-        repository = explicit_repository or _normalize_repository_context(request.repository) or _normalize_repository_context(get_active_repository())
+        is_build_request = _is_explicit_build_request(request.message)
+
+        # Repository context is an attachment, not a global chat mode. An explicitly named
+        # repository in the message always wins. A UI-selected repository is only consumed by
+        # software-engineering requests unless the UI explicitly marks it as attached.
+        attached_repository = _normalize_repository_context(request.repository) if request.repository_attached else None
+        build_repository = _normalize_repository_context(request.repository) if is_build_request else None
+        repository = explicit_repository or attached_repository or build_repository
+
         if repository:
             from tools.github.repository_agent import _resolve_repository
             repository = await _resolve_repository(repository)
-            set_active_repository(repository)
+            if request.repository_attached or is_build_request or explicit_repository:
+                set_active_repository(repository)
 
-        if _is_explicit_build_request(request.message):
+        if is_build_request:
             from core.agents.developer_loop import DeveloperLoop
             result = await DeveloperLoop(max_iterations=6, allow_mutations=True).run(request.message, repository)
             response = _developer_response(result, repository)
