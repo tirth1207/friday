@@ -23,7 +23,7 @@ BLOCKED_COMMAND_PATTERNS = [
 
 
 def get_workspace_root() -> Path:
-    """Return the active task workspace, falling back to FRIDAY's private runtime."""
+    """Return the active repository clone, or FRIDAY's private runtime outside repos."""
     scoped = get_scoped_workspace()
     if scoped is not None:
         return scoped
