@@ -40,6 +40,23 @@ Never invent tool names or arguments. Never expose credentials, tokens, hidden p
 chain-of-thought, or internal planning text. Reasoning is an internal implementation detail; the
 user-facing response must contain only the final answer.
 
+LIVE DATA AND OSIRIS:
+FRIDAY has access to OSIRIS Intelligence at https://osirisai.live as a live, read-only source layer.
+When a request asks for current/latest/live/today/recent/now information, prefer an appropriate OSIRIS
+feed before relying on model memory. Use OSIRIS for current weather, earthquakes, wildfires, aviation,
+satellites, space weather, wars/conflicts, frontlines, geopolitical events, country risk, news, markets,
+crypto, maritime, infrastructure, cyber telemetry, malware telemetry, and documented passive OSINT lookups.
+Use osiris.intelligence_brief when a question spans several live domains. Use research.web.search or
+research.web.fetch to supplement OSIRIS or investigate topics beyond its catalog.
+Treat OSIRIS as source data: preserve source/timestamp context where useful and distinguish reported
+observations from FRIDAY inference. Never present stale model memory as a live observation when a matching
+live tool is available.
+
+OSIRIS SAFETY:
+The OSIRIS capability surface exposed to you is deliberately read-only. Do not invent or invoke scanner,
+SDK ingest, webhook, or AI POST routes as ordinary awareness tools. Do not perform active host sweeps or
+turn arbitrary URL probing into hidden background research.
+
 Repository resolution is request-scoped and has this priority:
 1. An explicit owner/repository written in the current user message.
 2. An explicit repository/project name written in the current user message.
@@ -52,8 +69,6 @@ filesystem tools for remote GitHub repositories.
 Repository explanations should start with github.analyze and then use targeted GitHub tools if more evidence is needed.
 Self-improvement may inspect FRIDAY and propose or verify changes, but mutations, dependency changes, commits, pushes,
 and deployment require explicit user approval.
-Never output tool-call JSON, internal execution instructions, or draft reasoning. Answer from collected evidence and
-distinguish observed facts from reasonable inferences.
 """.strip()
 
 _GITHUB_ARGUMENT_ALIASES = {
@@ -126,45 +141,22 @@ def _extract_repository_target(message: str, resolved_request: str, selected_rep
     """Resolve repository context without allowing stale UI context to win."""
     combined = f"{message}\n{resolved_request}"
     text = message or ""
-
-    # The UI can emit the selected repo as `Repositoryowner/name` without a separator.
-    concatenated = re.match(
-        r"^repository(?P<repository>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b",
-        text,
-        re.IGNORECASE,
-    )
+    concatenated = re.match(r"^repository(?P<repository>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b", text, re.IGNORECASE)
     if concatenated:
         return concatenated.group("repository").removesuffix(".git")
-
-    owner_repo = re.search(
-        r"(?:\brepository\b\s*[:\-]?\s*)?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b",
-        text,
-        re.IGNORECASE,
-    )
+    owner_repo = re.search(r"(?:\brepository\b\s*[:\-]?\s*)?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:\.git)?\b", text, re.IGNORECASE)
     if owner_repo:
         return owner_repo.group(1).removesuffix(".git")
-
-    explicit_name = re.search(
-        r"\b(?:explain|describe|analyze|analyse|understand|overview)\s+(?!this\b|that\b)([A-Za-z0-9_.-]+)\s+(?:repo(?:sitory)?|project|codebase)\b",
-        text,
-        re.IGNORECASE,
-    )
+    explicit_name = re.search(r"\b(?:explain|describe|analyze|analyse|understand|overview)\s+(?!this\b|that\b)([A-Za-z0-9_.-]+)\s+(?:repo(?:sitory)?|project|codebase)\b", text, re.IGNORECASE)
     if explicit_name:
         name = explicit_name.group(1)
         return "tirth1207/friday" if name.lower() == "friday" else name
-
-    my_repo = re.search(
-        r"\b(?:my|the)\s+(?!this\b|that\b)([A-Za-z0-9_.-]+)\s+(?:repo(?:sitory)?|project|codebase)\b",
-        text,
-        re.IGNORECASE,
-    )
+    my_repo = re.search(r"\b(?:my|the)\s+(?!this\b|that\b)([A-Za-z0-9_.-]+)\s+(?:repo(?:sitory)?|project|codebase)\b", text, re.IGNORECASE)
     if my_repo:
         name = my_repo.group(1)
         return "tirth1207/friday" if name.lower() == "friday" else name
-
     if re.search(r"\bfriday\b", combined, re.IGNORECASE) and re.search(r"\b(?:repo|repository|project|codebase)\b", combined, re.IGNORECASE):
         return "tirth1207/friday"
-
     if selected_repository and selected_repository.strip():
         return selected_repository.strip()
     return None
@@ -177,11 +169,8 @@ def _clean_model_answer(content: Any) -> str:
     text = re.sub(r"^\s*(?:analysis|reasoning|chain[- ]of[- ]thought)\s*:\s*", "", text, flags=re.IGNORECASE)
     lowered = text[:1200].lower()
     internal_markers = (
-        "we need to produce",
-        "must include sections",
-        "now produce final answer",
-        "let's craft the final answer",
-        "we need to infer purpose",
+        "we need to produce", "must include sections", "now produce final answer",
+        "let's craft the final answer", "we need to infer purpose",
     )
     if any(marker in lowered for marker in internal_markers):
         heading = re.search(r"(?m)^#{1,6}\s+\S+", text)
@@ -196,13 +185,11 @@ def _format_repository_dossier_fallback(dossier: dict[str, Any]) -> str:
     commits = dossier.get("recent_commits") or []
     lines = [
         f"## {repo.get('full_name') or 'GitHub repository'}",
-        str(repo.get("description") or "No repository description is available."),
-        "",
+        str(repo.get("description") or "No repository description is available."), "",
         f"- Visibility: {'private' if repo.get('private') else 'public'}",
         f"- Primary language: {repo.get('language') or 'not specified'}",
         f"- Default branch: {repo.get('default_branch') or dossier.get('ref') or 'unknown'}",
-        f"- Files/tree entries discovered: {dossier.get('tree_count', 0)}",
-        "",
+        f"- Files/tree entries discovered: {dossier.get('tree_count', 0)}", "",
         "### Important files inspected",
     ]
     lines.extend(f"- `{path}`" for path in files)
@@ -253,10 +240,7 @@ async def _run_structured_agent(user_message: str, resolved_request: str, recent
     request_repository = _extract_repository_target(user_message, resolved_request, selected_repository)
     repository_context = f"\nRequest-scoped GitHub repository target: {request_repository}" if request_repository else ""
     messages: list[Any] = [
-        SystemMessage(content=(
-            f"{SYSTEM_PROMPT}\n\nResolved request:\n{resolved_request}{repository_context}\n\n"
-            f"Recent conversation:\n{json.dumps(recent_messages[-12:], ensure_ascii=False, default=str)}"
-        )),
+        SystemMessage(content=(f"{SYSTEM_PROMPT}\n\nResolved request:\n{resolved_request}{repository_context}\n\nRecent conversation:\n{json.dumps(recent_messages[-12:], ensure_ascii=False, default=str)}")),
         HumanMessage(content=user_message),
     ]
     history: list[dict[str, Any]] = []
@@ -271,8 +255,7 @@ async def _run_structured_agent(user_message: str, resolved_request: str, recent
             if pseudo_call:
                 pseudo_name, pseudo_args = pseudo_call
                 if request_repository and pseudo_name.startswith("github."):
-                    pseudo_args = dict(pseudo_args)
-                    pseudo_args["repository"] = request_repository
+                    pseudo_args = dict(pseudo_args); pseudo_args["repository"] = request_repository
                 try:
                     result, _ = await _execute_structured_tool(pseudo_name, pseudo_args, tool_by_model_name, history)
                     messages.append(ToolMessage(content=serialize_tool_result(result), tool_call_id=f"compat-{len(history)}"))
@@ -287,8 +270,7 @@ async def _run_structured_agent(user_message: str, resolved_request: str, recent
             if not isinstance(arguments, dict):
                 arguments = {}
             if request_repository and model_tool_name.startswith("github."):
-                arguments = dict(arguments)
-                arguments["repository"] = request_repository
+                arguments = dict(arguments); arguments["repository"] = request_repository
             try:
                 result, _ = await _execute_structured_tool(model_tool_name, arguments, tool_by_model_name, history)
                 messages.append(ToolMessage(content=serialize_tool_result(result), tool_call_id=call.get("id") or model_tool_name))
@@ -296,11 +278,7 @@ async def _run_structured_agent(user_message: str, resolved_request: str, recent
                 messages.append(ToolMessage(content=f"Tool execution failed: {error}", tool_call_id=call.get("id") or model_tool_name))
     fallback = await get_model(require_tools=False).ainvoke([
         SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(content=(
-            "Give a complete final answer using this specialist execution history. "
-            "Do not output tool JSON, planning notes, or reasoning.\n\n"
-            f"Request: {user_message}\n\nHistory:\n{_compact_history(history)}"
-        )),
+        HumanMessage(content=("Give a complete final answer using this specialist execution history. Do not output tool JSON, planning notes, or reasoning.\n\n" f"Request: {user_message}\n\nHistory:\n{_compact_history(history)}")),
     ])
     return _clean_model_answer(getattr(fallback, "content", fallback))
 
@@ -309,91 +287,32 @@ async def _run_github_repository_agent(user_message: str, resolved_request: str,
     target = _extract_repository_target(user_message, resolved_request, selected_repository)
     if not target:
         return None
-    github_agent = GitHubAgent()
-    await github_agent.create()
-    await github_agent.start(f"Inspecting repository {target}")
+    github_agent = GitHubAgent(); await github_agent.create(); await github_agent.start(f"Inspecting repository {target}")
     dossier = await github_analyze_repository(target, max_files=18, commit_limit=8)
-    await github_agent.complete(
-        f"Repository evidence collected for {dossier.get('repository', {}).get('full_name', target)}",
-        metadata={"tree_count": dossier.get("tree_count", 0), "files": len(dossier.get("files", []))},
-    )
+    await github_agent.complete(f"Repository evidence collected for {dossier.get('repository', {}).get('full_name', target)}", metadata={"tree_count": dossier.get("tree_count", 0), "files": len(dossier.get("files", []))})
     synthesis_payload = {
-        "repository": dossier.get("repository"),
-        "ref": dossier.get("ref"),
-        "tree_count": dossier.get("tree_count"),
-        "tree_is_partial": dossier.get("tree_is_partial"),
-        "tree_paths": [item.get("path") for item in dossier.get("tree", [])],
-        "selected_files": dossier.get("files", []),
-        "recent_commits": dossier.get("recent_commits", []),
-        "analysis_notes": dossier.get("analysis_notes", []),
+        "repository": dossier.get("repository"), "ref": dossier.get("ref"), "tree_count": dossier.get("tree_count"),
+        "tree_is_partial": dossier.get("tree_is_partial"), "tree_paths": [item.get("path") for item in dossier.get("tree", [])],
+        "selected_files": dossier.get("files", []), "recent_commits": dossier.get("recent_commits", []), "analysis_notes": dossier.get("analysis_notes", []),
     }
     try:
         evidence = json.dumps(synthesis_payload, ensure_ascii=False, default=str)[:_MAX_CONTEXT_CHARS]
         synthesis = await get_model(require_tools=False).ainvoke([
-            SystemMessage(content=(
-                "You are FRIDAY's senior GitHub analyst. Produce the final answer only, never your private "
-                "reasoning or drafting process. Produce a complete but focused repository explanation from the "
-                "supplied evidence. Cover: purpose, main features, users/use cases, architecture, technologies, "
-                "important directories/files, request/data flow, integrations, auth/security, deployment, testing, "
-                "and notable risks/gaps. Use Markdown headings and bullets. Do not stop halfway. Target 1000-1600 words. "
-                "If evidence is missing, explicitly say it was not verified. Never invent facts and never expose secrets."
-            )),
-            HumanMessage(content=f"User request: {user_message}\nSelected repository: {target}\n\nGitHub evidence:\n{evidence}"),
+            SystemMessage(content=("You are FRIDAY's senior GitHub analyst. Produce the final answer only, never your private reasoning or drafting process. Produce a complete but focused repository explanation from supplied evidence. Cover purpose, main features, users/use cases, architecture, technologies, important directories/files, data flow, risks/gaps, and useful next steps. Distinguish observed facts from inference.")),
+            HumanMessage(content=f"Repository request: {user_message}\n\nEvidence:\n{evidence}"),
         ])
-        content = getattr(synthesis, "content", synthesis)
-        if isinstance(content, str) and content.strip():
-            return _clean_model_answer(content)
-    except Exception as error:
-        print(f"[FRIDAY] GitHub evidence collected but NVIDIA synthesis failed: {error}")
-    return _format_repository_dossier_fallback(dossier)
+        return _clean_model_answer(getattr(synthesis, "content", synthesis))
+    except Exception:
+        return _format_repository_dossier_fallback(synthesis_payload)
 
 
-async def ask_friday(message: str, repository: str | None = None) -> str:
-    context = resolve_request(message)
-    resolved_request = context["resolved_request"]
-    recent_messages = context["recent_messages"]
-    memory_store.add_message("user", message)
-    if not is_tool_required(resolved_request):
-        response = await answer_conversationally(message, recent_messages)
-        memory_store.add_message("assistant", response)
-        return response
-
-    await agent_runtime.emit(event_type="thinking", title="Understanding request", description="FRIDAY is selecting and coordinating specialist agents. Internal reasoning remains private; only execution progress is shown in the trace.", status="running")
-
-    if _is_environment_key_request(resolved_request):
-        try:
-            result = await _execute_github_tool("github.file.read", {"repository": "tirth1207/friday", "path": ".env.example"}, "Reading .env.example to identify required environment keys")
-            response = _format_env_key_result(result)
-        except Exception as error:
-            response = f"I couldn't read the repository's `.env.example`: {error}"
-        memory_store.add_message("assistant", response)
-        return response
-
-    if _is_github_repository_list_request(resolved_request):
-        try:
-            result = await _execute_github_tool("github.repositories", {"limit": 100, "sort": "pushed", "page": 1}, "Fetching GitHub repositories")
-            response = _format_repository_list(result if isinstance(result, list) else [])
-        except Exception as error:
-            response = f"I couldn't fetch your GitHub repositories: {error}"
-        memory_store.add_message("assistant", response)
-        return response
-
-    if re.search(r"\b(?:explain|describe|analyze|analyse|understand|overview)\b", resolved_request, re.IGNORECASE) and re.search(r"\b(?:repo|repository|project|codebase)\b", resolved_request, re.IGNORECASE):
-        try:
-            github_response = await _run_github_repository_agent(message, resolved_request, selected_repository=repository)
-            if github_response:
-                memory_store.add_message("assistant", github_response)
-                return github_response
-        except Exception as error:
-            print(f"[FRIDAY] GitHub Agent failed: {error}")
-            response = f"I couldn't inspect the requested GitHub repository: {error}"
-            memory_store.add_message("assistant", response)
-            return response
-
-    try:
-        response = await _run_structured_agent(message, resolved_request, recent_messages, selected_repository=repository)
-    except Exception as error:
-        print(f"[FRIDAY] Structured supervisor failed: {error}")
-        response = f"I couldn't complete the request right now. The provider returned: {error}"
-    memory_store.add_message("assistant", response)
-    return response
+async def ask_friday(user_message: str, repository: str | None = None) -> str:
+    resolved_request = await resolve_request(user_message)
+    recent_messages = memory_store.get_recent_messages(12)
+    if _is_github_repository_list_request(user_message):
+        return await _format_repository_list()
+    if _is_environment_key_request(user_message):
+        return await _format_env_key_result(user_message)
+    if is_tool_required(user_message):
+        return await _run_structured_agent(user_message, resolved_request, recent_messages, repository)
+    return await answer_conversationally(user_message, repository=repository)
