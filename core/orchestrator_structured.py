@@ -297,4 +297,7 @@ async def ask_friday(user_message: str, repository: str | None = None) -> str:
         return await _format_env_key_result(user_message)
     if is_tool_required(user_message):
         return await _run_structured_agent(user_message, resolved_request, recent_messages, repository)
-    return await answer_conversationally(user_message, repository=repository)
+    # The legacy orchestrator exposes answer_conversationally(message, conversation_context).
+    # Keep this boundary explicit so a repository attachment cannot leak into the wrong
+    # call signature and produce a runtime TypeError on ordinary chat messages.
+    return await answer_conversationally(user_message, recent_messages)
