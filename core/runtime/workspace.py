@@ -10,14 +10,19 @@ _workspace_override: ContextVar[Path | None] = ContextVar("friday_workspace_over
 
 
 def get_scoped_workspace() -> Path | None:
-    """Return the task-local workspace override, if one is active."""
+    """Return the task-local repository workspace, if one is active."""
     return _workspace_override.get()
 
 
 @contextmanager
 def scoped_workspace(path: str | Path):
-    """Route filesystem, Git and terminal tools to one isolated workspace."""
-    target = Path(path).resolve()
+    """Route filesystem, Git and terminal tools to one isolated repository clone."""
+    target = Path(path).expanduser().resolve()
+    if not target.exists() or not target.is_dir():
+        raise FileNotFoundError(f"Scoped workspace does not exist: {target}")
+    if not (target / ".git").is_dir():
+        raise ValueError(f"Scoped workspace is not a Git repository: {target}")
+
     token = _workspace_override.set(target)
     try:
         yield target
