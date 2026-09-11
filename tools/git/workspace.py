@@ -6,6 +6,7 @@ import hashlib
 import os
 import re
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,28 @@ def _remove_failed_target(target: Path) -> None:
             shutil.rmtree(target)
     except OSError:
         pass
+
+
+def _run_process(command: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None, timeout: float = 120.0) -> subprocess.CompletedProcess[str]:
+    """Run a process in a worker thread instead of asyncio subprocess APIs.
+
+    asyncio.create_subprocess_* is unreliable in some Windows event-loop/runtime
+    combinations used by FRIDAY. subprocess.run is synchronous but is safely
+    isolated from the event loop with asyncio.to_thread.
+    """
+    return subprocess.run(
+        command,
+        cwd=str(cwd) if cwd else None,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+        check=False,
+    )
 
 
 async def prepare_repository_workspace(repository: str, ref: str | None = None) -> dict[str, Any]:
@@ -42,7 +65,6 @@ async def prepare_repository_workspace(repository: str, ref: str | None = None) 
     if git_dir.is_dir():
         return {"repository": repo, "ref": ref, "workspace": str(target), "reused": True}
 
-    # A previous interrupted/failed clone may have left a partial directory behind.
     if target.exists():
         _remove_failed_target(target)
 
@@ -54,29 +76,30 @@ async def prepare_repository_workspace(repository: str, ref: str | None = None) 
     command.extend([clone_url, str(target)])
 
     env = os.environ.copy()
-    # Git reads the OAuth token through an ephemeral askpass helper; the token is never placed in argv.
     token = str((load_connection() or {}).get("access_token") or "").strip()
     if token:
         env["GIT_ASKPASS"] = str(Path(__file__).resolve().parents[2] / "core" / "runtime" / "github_askpass.py")
         env["FRIDAY_GITHUB_TOKEN"] = token
-        env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_TERMINAL_PROMPT"] = "0"
 
-    process = await asyncio.create_subprocess_exec(
-        *command,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=env,
-    )
-    stdout, stderr = await process.communicate()
-    if process.returncode != 0:
+    try:
+        result = await asyncio.to_thread(_run_process, command, env=env, timeout=120.0)
+    except subprocess.TimeoutExpired as exc:
         _remove_failed_target(target)
-        error = stderr.decode("utf-8", errors="replace")[-4000:]
-        raise RuntimeError(f"Could not prepare repository workspace: {error}")
+        raise TimeoutError("Repository clone timed out after 120 seconds.") from exc
+    except OSError as exc:
+        _remove_failed_target(target)
+        raise RuntimeError(f"Unable to start Git: {exc}") from exc
+
+    if result.returncode != 0:
+        _remove_failed_target(target)
+        error = result.stderr[-4000:]
+        raise RuntimeError(f"Could not prepare repository workspace (git clone exited {result.returncode}): {error}")
 
     return {
         "repository": repo,
         "ref": ref,
         "workspace": str(target),
         "reused": False,
-        "output": stdout.decode("utf-8", errors="replace")[-1000:],
+        "output": result.stdout[-1000:],
     }
