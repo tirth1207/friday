@@ -80,6 +80,19 @@ async def test_create_and_verify():
 
 
 @pytest.mark.asyncio
+async def test_repository_files_are_not_redirected_into_friday_metadata():
+    root_file = validate_workspace_path("test.txt")
+    assert root_file == get_workspace_root() / "test.txt"
+    assert not root_file.parts[-2:] == (".friday", "test.txt")
+
+    with pytest.raises(PermissionError):
+        validate_workspace_path(".friday/test.txt")
+
+    with pytest.raises(PermissionError):
+        validate_workspace_path("./.friday/test.txt")
+
+
+@pytest.mark.asyncio
 async def test_security_path_traversal():
     with pytest.raises(PermissionError):
         validate_workspace_path("../../etc/passwd")
