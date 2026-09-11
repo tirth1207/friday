@@ -26,40 +26,31 @@ def _remove_failed_target(target: Path) -> None:
 
 
 def _run_process(command: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None, timeout: float = 120.0) -> subprocess.CompletedProcess[str]:
-    """Run a process in a worker thread instead of asyncio subprocess APIs.
+    """Run a process in a worker thread instead of asyncio subprocess APIs."""
+    return subprocess.run(command, cwd=str(cwd) if cwd else None, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", timeout=timeout, check=False)
 
-    asyncio.create_subprocess_* is unreliable in some Windows event-loop/runtime
-    combinations used by FRIDAY. subprocess.run is synchronous but is safely
-    isolated from the event loop with asyncio.to_thread.
-    """
-    return subprocess.run(
-        command,
-        cwd=str(cwd) if cwd else None,
-        env=env,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-        check=False,
-    )
+
+def _workspace_root() -> Path:
+    return Path(settings.friday_workspace).expanduser().resolve()
+
+
+def _workspace_name(repository: str, ref: str | None) -> str:
+    safe_repo = re.sub(r"[^A-Za-z0-9_.-]+", "_", repository).strip("_.-") or "repo"
+    key = hashlib.sha256(f"{repository}\0{ref or ''}".encode()).hexdigest()[:10]
+    return f"{safe_repo}_{key}"
 
 
 async def prepare_repository_workspace(repository: str, ref: str | None = None) -> dict[str, Any]:
-    """Clone or reuse a selected GitHub repository in FRIDAY's isolated workspace."""
-    if not _REPOSITORY.fullmatch(repository.strip()):
+    """Clone or reuse a selected GitHub repository in FRIDAY's private runtime."""
+    repo = repository.strip()
+    if not _REPOSITORY.fullmatch(repo):
         raise ValueError("Repository must use owner/name format.")
 
     await refresh_connection_if_needed()
-    repo = repository.strip()
-    workspace_root = Path(settings.friday_workspace).resolve()
-    workspace_dir = workspace_root / ".friday" / "workspaces"
+    workspace_dir = _workspace_root() / "workspaces"
     workspace_dir.mkdir(parents=True, exist_ok=True)
 
-    key = hashlib.sha256(f"{repo}\0{ref or ''}".encode()).hexdigest()[:16]
-    target = workspace_dir / key
+    target = workspace_dir / _workspace_name(repo, ref)
     git_dir = target / ".git"
 
     if git_dir.is_dir():
@@ -68,7 +59,6 @@ async def prepare_repository_workspace(repository: str, ref: str | None = None) 
     if target.exists():
         _remove_failed_target(target)
 
-    target.parent.mkdir(parents=True, exist_ok=True)
     clone_url = f"https://github.com/{repo}.git"
     command = ["git", "clone", "--depth", "1"]
     if ref:
@@ -96,10 +86,4 @@ async def prepare_repository_workspace(repository: str, ref: str | None = None) 
         error = result.stderr[-4000:]
         raise RuntimeError(f"Could not prepare repository workspace (git clone exited {result.returncode}): {error}")
 
-    return {
-        "repository": repo,
-        "ref": ref,
-        "workspace": str(target),
-        "reused": False,
-        "output": result.stdout[-1000:],
-    }
+    return {"repository": repo, "ref": ref, "workspace": str(target), "reused": False, "output": result.stdout[-1000:]}
