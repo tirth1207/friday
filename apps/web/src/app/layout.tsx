@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import "./agent-theme.css";
 import ThemeToggle from "../components/theme-toggle";
+import GithubContext from "../components/github-context";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -28,6 +29,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="min-h-full flex flex-col">
         {children}
+        <GithubContext />
         <ThemeToggle />
       </body>
     </html>
