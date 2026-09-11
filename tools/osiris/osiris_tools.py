@@ -8,8 +8,9 @@ surface so live awareness cannot silently become external side effects.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import aiohttp
 
@@ -19,90 +20,38 @@ _MAX_RESPONSE_BYTES = 2_000_000
 
 # Public read-only routes documented by OSIRIS' current API catalog.
 _ENDPOINTS: dict[str, str] = {
-    # System
-    "health": "/api/health",
-    "stats": "/api/stats",
-    # Aviation & space
-    "flights": "/api/flights",
-    "satellites": "/api/satellites",
-    "space_weather": "/api/space-weather",
-    # Earth & environment
-    "earthquakes": "/api/earthquakes",
-    "fires": "/api/fires",
-    "weather": "/api/weather",
-    "air_quality": "/api/air-quality",
-    "radar": "/api/radar",
-    "sentinel": "/api/sentinel",
-    # Geopolitical
-    "conflicts": "/api/conflicts",
-    "frontlines": "/api/frontlines",
-    "gdelt": "/api/gdelt",
-    "country_risk": "/api/country-risk",
-    "region_dossier": "/api/region-dossier",
-    # Media & markets
-    "news": "/api/news",
-    "live_news": "/api/live-news",
-    "markets": "/api/markets",
-    "crypto": "/api/crypto",
-    "scm_suppliers": "/api/scm-suppliers",
-    # Surveillance & infrastructure (read-only data/probes)
-    "cctv": "/api/cctv",
-    "cctv_stream_status": "/api/cctv/stream-status",
-    "infrastructure": "/api/infrastructure",
-    "maritime": "/api/maritime",
-    "arcgis": "/api/arcgis",
-    "geo": "/api/geo",
-    # Cyber telemetry
-    "cyber_threats": "/api/cyber-threats",
-    "cyber_attacks": "/api/cyber-attacks",
-    "malware": "/api/malware",
-    # Passive OSINT lookups
-    "osint_dns": "/api/osint/dns",
-    "osint_whois": "/api/osint/whois",
-    "osint_certs": "/api/osint/certs",
-    "osint_ip": "/api/osint/ip",
-    "osint_shodan": "/api/osint/shodan",
-    "osint_bgp": "/api/osint/bgp",
-    "osint_mac": "/api/osint/mac",
-    "osint_phone": "/api/osint/phone",
-    "osint_github": "/api/osint/github",
-    "osint_leaks": "/api/osint/leaks",
-    "osint_hudsonrock": "/api/osint/hudsonrock",
-    "osint_cve": "/api/osint/cve",
-    "osint_sanctions": "/api/osint/sanctions",
-    "osint_threats": "/api/osint/threats",
-    "osint_sweep": "/api/osint/sweep",
-    # Entity graph
+    "health": "/api/health", "stats": "/api/stats",
+    "flights": "/api/flights", "satellites": "/api/satellites", "space_weather": "/api/space-weather",
+    "earthquakes": "/api/earthquakes", "fires": "/api/fires", "weather": "/api/weather",
+    "air_quality": "/api/air-quality", "radar": "/api/radar", "sentinel": "/api/sentinel",
+    "conflicts": "/api/conflicts", "frontlines": "/api/frontlines", "gdelt": "/api/gdelt",
+    "country_risk": "/api/country-risk", "region_dossier": "/api/region-dossier",
+    "news": "/api/news", "live_news": "/api/live-news", "markets": "/api/markets",
+    "crypto": "/api/crypto", "scm_suppliers": "/api/scm-suppliers",
+    "cctv": "/api/cctv", "cctv_stream_status": "/api/cctv/stream-status",
+    "infrastructure": "/api/infrastructure", "maritime": "/api/maritime", "arcgis": "/api/arcgis", "geo": "/api/geo",
+    "cyber_threats": "/api/cyber-threats", "cyber_attacks": "/api/cyber-attacks", "malware": "/api/malware",
+    "osint_dns": "/api/osint/dns", "osint_whois": "/api/osint/whois", "osint_certs": "/api/osint/certs",
+    "osint_ip": "/api/osint/ip", "osint_shodan": "/api/osint/shodan", "osint_bgp": "/api/osint/bgp",
+    "osint_mac": "/api/osint/mac", "osint_phone": "/api/osint/phone", "osint_github": "/api/osint/github",
+    "osint_leaks": "/api/osint/leaks", "osint_hudsonrock": "/api/osint/hudsonrock", "osint_cve": "/api/osint/cve",
+    "osint_sanctions": "/api/osint/sanctions", "osint_threats": "/api/osint/threats",
+    # /api/osint/sweep is deliberately not included in the autonomous read surface: it actively probes hosts.
     "entity_expand": "/api/entity/expand",
 }
 
-# Query parameters are explicit rather than passed through blindly. This keeps
-# the read layer constrained to documented input shapes.
 _ENDPOINT_PARAMS: dict[str, frozenset[str]] = {
-    "news": frozenset({"q"}),
-    "live_news": frozenset({"q"}),
+    "news": frozenset({"q"}), "live_news": frozenset({"q"}),
     "sentinel": frozenset({"lat", "lng", "radius", "days"}),
     "cctv": frozenset({"region", "lat", "lng", "radius"}),
-    "cctv_stream_status": frozenset({"url"}),
-    "maritime": frozenset(),
-    "arcgis": frozenset({"service", "q", "bbox"}),
+    "cctv_stream_status": frozenset({"url"}), "arcgis": frozenset({"service", "q", "bbox"}),
     "region_dossier": frozenset({"lat", "lng"}),
-    "geo": frozenset(),
-    "osint_dns": frozenset({"domain"}),
-    "osint_whois": frozenset({"domain"}),
-    "osint_certs": frozenset({"domain"}),
-    "osint_ip": frozenset({"ip"}),
-    "osint_shodan": frozenset({"ip"}),
-    "osint_bgp": frozenset({"query"}),
-    "osint_mac": frozenset({"mac"}),
-    "osint_phone": frozenset({"number"}),
-    "osint_github": frozenset({"user"}),
-    "osint_leaks": frozenset({"email"}),
-    "osint_hudsonrock": frozenset({"query", "type"}),
-    "osint_cve": frozenset({"cve"}),
-    "osint_sanctions": frozenset({"query", "schema", "limit"}),
-    "osint_threats": frozenset({"query"}),
-    "osint_sweep": frozenset({"ip", "cidr"}),
+    "osint_dns": frozenset({"domain"}), "osint_whois": frozenset({"domain"}),
+    "osint_certs": frozenset({"domain"}), "osint_ip": frozenset({"ip"}), "osint_shodan": frozenset({"ip"}),
+    "osint_bgp": frozenset({"query"}), "osint_mac": frozenset({"mac"}), "osint_phone": frozenset({"number"}),
+    "osint_github": frozenset({"user"}), "osint_leaks": frozenset({"email"}),
+    "osint_hudsonrock": frozenset({"query", "type"}), "osint_cve": frozenset({"cve"}),
+    "osint_sanctions": frozenset({"query", "schema", "limit"}), "osint_threats": frozenset({"query"}),
     "entity_expand": frozenset({"id", "type"}),
 }
 
@@ -127,24 +76,27 @@ def _build_params(
     radius_km: float | None = None,
     **extra: Any,
 ) -> dict[str, Any]:
-    """Build only documented parameters for a logical endpoint.
-
-    Generic arguments are retained for backwards compatibility with the
-    original FRIDAY integration; endpoint-specific callers use ``extra``.
-    """
     supported = _ENDPOINT_PARAMS.get(endpoint, frozenset())
     candidates: dict[str, Any] = {
-        "q": query,
-        "lat": latitude,
-        "lng": longitude,
-        "radius": radius_km,
-        **extra,
+        "q": query, "lat": latitude, "lng": longitude, "radius": radius_km, **extra,
     }
-    return {
-        key: value
-        for key, value in candidates.items()
-        if key in supported and value is not None and value != ""
-    }
+    return {key: value for key, value in candidates.items() if key in supported and value is not None and value != ""}
+
+
+def _validate_public_url(value: str) -> str:
+    """Only permit public HTTP(S) URLs for the camera stream status probe."""
+    parsed = urlparse(value.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("Stream URL must be an absolute HTTP(S) URL.")
+    try:
+        address = ipaddress.ip_address(parsed.hostname)
+        if not address.is_global:
+            raise ValueError("Private or local stream addresses are not allowed.")
+    except ValueError:
+        # Hostnames are allowed; DNS resolution stays with OSIRIS upstream.
+        if not parsed.hostname.replace(".", "").replace("-", "").isalnum():
+            raise ValueError("Invalid stream hostname.")
+    return value.strip()
 
 
 async def _request(endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -153,7 +105,6 @@ async def _request(endpoint: str, params: dict[str, Any] | None = None) -> dict[
     url = f"{OSIRIS_BASE_URL}{path}"
     if query:
         url = f"{url}?{urlencode(query, doseq=True)}"
-
     timeout = aiohttp.ClientTimeout(total=OSIRIS_TIMEOUT_SECONDS)
     headers = {"Accept": "application/json", "User-Agent": "FRIDAY/1.1"}
     try:
@@ -175,13 +126,7 @@ async def _request(endpoint: str, params: dict[str, Any] | None = None) -> dict[
         raise RuntimeError(f"OSIRIS request timed out after {OSIRIS_TIMEOUT_SECONDS}s") from error
     except aiohttp.ClientError as error:
         raise RuntimeError(f"OSIRIS request failed: {error}") from error
-
-    return {
-        "source": "OSIRIS Intelligence",
-        "endpoint": path,
-        "url": url,
-        "data": data,
-    }
+    return {"source": "OSIRIS Intelligence", "endpoint": path, "url": url, "data": data}
 
 
 async def osiris_intelligence(
@@ -190,20 +135,10 @@ async def osiris_intelligence(
     latitude: float | None = None,
     longitude: float | None = None,
     radius_km: float | None = None,
-    **extra: Any,
+    extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Call one allow-listed, read-only OSIRIS endpoint."""
-    return await _request(
-        endpoint,
-        _build_params(
-            endpoint,
-            query=query,
-            latitude=latitude,
-            longitude=longitude,
-            radius_km=radius_km,
-            **extra,
-        ),
-    )
+    """Call one allow-listed, read-only OSIRIS endpoint with documented params."""
+    return await _request(endpoint, _build_params(endpoint, query, latitude, longitude, radius_km, **(extra or {})))
 
 
 async def osiris_health() -> dict[str, Any]: return await _request("health")
@@ -231,59 +166,40 @@ async def osiris_cyber_attacks() -> dict[str, Any]: return await _request("cyber
 async def osiris_malware() -> dict[str, Any]: return await _request("malware")
 async def osiris_scm_suppliers() -> dict[str, Any]: return await _request("scm_suppliers")
 
-
 async def osiris_sentinel(latitude: float, longitude: float, radius_km: float = 50, days: int = 30) -> dict[str, Any]:
-    return await osiris_intelligence(
-        "sentinel", latitude=latitude, longitude=longitude, radius_km=radius_km, days=days,
-    )
+    return await osiris_intelligence("sentinel", latitude=latitude, longitude=longitude, radius_km=radius_km, extra={"days": days})
 
-
-async def osiris_cctv(region: str = "", latitude: float | None = None, longitude: float | None = None,
-                      radius_km: float | None = None) -> dict[str, Any]:
-    return await osiris_intelligence(
-        "cctv", region=region, latitude=latitude, longitude=longitude, radius_km=radius_km,
-    )
-
+async def osiris_cctv(region: str = "", latitude: float | None = None, longitude: float | None = None, radius_km: float | None = None) -> dict[str, Any]:
+    return await osiris_intelligence("cctv", latitude=latitude, longitude=longitude, radius_km=radius_km, extra={"region": region})
 
 async def osiris_cctv_stream_status(url: str) -> dict[str, Any]:
-    return await osiris_intelligence("cctv_stream_status", url=url)
-
+    return await osiris_intelligence("cctv_stream_status", extra={"url": _validate_public_url(url)})
 
 async def osiris_arcgis(service: str = "", query: str = "", bbox: str = "") -> dict[str, Any]:
-    return await osiris_intelligence("arcgis", service=service, q=query, bbox=bbox)
-
+    return await osiris_intelligence("arcgis", extra={"service": service, "q": query, "bbox": bbox})
 
 async def osiris_region_dossier(latitude: float, longitude: float) -> dict[str, Any]:
     return await osiris_intelligence("region_dossier", latitude=latitude, longitude=longitude)
 
 
 async def osiris_osint_lookup(kind: str, value: str, secondary: str = "", limit: int | None = None) -> dict[str, Any]:
-    """Run a passive OSINT lookup using an explicit logical lookup type."""
-    endpoint = f"osint_{kind.strip().lower()}"
-    if endpoint not in _ENDPOINTS:
-        raise ValueError(f"Unsupported OSINT lookup: {kind}")
+    """Run a passive OSINT lookup using an explicit documented lookup type."""
+    normalized = kind.strip().lower()
+    endpoint = f"osint_{normalized}"
+    if normalized == "sweep" or endpoint not in _ENDPOINTS:
+        raise ValueError(f"Unsupported passive OSINT lookup: {kind}")
     param_by_kind = {
-        "dns": {"domain": value},
-        "whois": {"domain": value},
-        "certs": {"domain": value},
-        "ip": {"ip": value},
-        "shodan": {"ip": value},
-        "bgp": {"query": value},
-        "mac": {"mac": value},
-        "phone": {"number": value},
-        "github": {"user": value},
-        "leaks": {"email": value},
-        "hudsonrock": {"query": value, "type": secondary},
-        "cve": {"cve": value},
-        "sanctions": {"query": value, "schema": secondary, "limit": limit},
-        "threats": {"query": value},
-        "sweep": {"ip": value, "cidr": secondary},
+        "dns": {"domain": value}, "whois": {"domain": value}, "certs": {"domain": value},
+        "ip": {"ip": value}, "shodan": {"ip": value}, "bgp": {"query": value}, "mac": {"mac": value},
+        "phone": {"number": value}, "github": {"user": value}, "leaks": {"email": value},
+        "hudsonrock": {"query": value, "type": secondary}, "cve": {"cve": value},
+        "sanctions": {"query": value, "schema": secondary, "limit": limit}, "threats": {"query": value},
     }
-    params = param_by_kind.get(kind.strip().lower())
+    params = param_by_kind.get(normalized)
     if params is None:
-        raise ValueError(f"Unsupported OSINT lookup: {kind}")
+        raise ValueError(f"Unsupported passive OSINT lookup: {kind}")
     return await _request(endpoint, _build_params(endpoint, **params))
 
 
 async def osiris_entity_expand(entity_id: str, entity_type: str) -> dict[str, Any]:
-    return await osiris_intelligence("entity_expand", id=entity_id, type=entity_type)
+    return await osiris_intelligence("entity_expand", extra={"id": entity_id, "type": entity_type})
