@@ -48,7 +48,6 @@ def validate_workspace_path(path_str: str, allow_outside: bool = False) -> Path:
     target_path = (workspace / raw_path).resolve() if not raw_path.is_absolute() else raw_path.resolve()
     target_str = str(target_path)
     target_parts = [p.lower() for p in target_path.parts]
-    workspace_parts = len(workspace.parts)
 
     for sensitive in SENSITIVE_PATTERNS:
         sens_lower = sensitive.lower()
