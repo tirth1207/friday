@@ -17,7 +17,6 @@ _REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
 def _remove_failed_target(target: Path) -> None:
-    """Remove only the task-specific clone directory after a failed clone."""
     try:
         if target.is_dir():
             shutil.rmtree(target)
@@ -26,7 +25,6 @@ def _remove_failed_target(target: Path) -> None:
 
 
 def _run_process(command: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None, timeout: float = 120.0) -> subprocess.CompletedProcess[str]:
-    """Run a process in a worker thread instead of asyncio subprocess APIs."""
     return subprocess.run(command, cwd=str(cwd) if cwd else None, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", timeout=timeout, check=False)
 
 
@@ -41,7 +39,7 @@ def _workspace_name(repository: str, ref: str | None) -> str:
 
 
 async def prepare_repository_workspace(repository: str, ref: str | None = None) -> dict[str, Any]:
-    """Clone or reuse a selected GitHub repository in FRIDAY's private runtime."""
+    """Clone or reuse a selected repository under FRIDAY's private runtime."""
     repo = repository.strip()
     if not _REPOSITORY.fullmatch(repo):
         raise ValueError("Repository must use owner/name format.")
@@ -52,18 +50,15 @@ async def prepare_repository_workspace(repository: str, ref: str | None = None) 
 
     target = workspace_dir / _workspace_name(repo, ref)
     git_dir = target / ".git"
-
     if git_dir.is_dir():
         return {"repository": repo, "ref": ref, "workspace": str(target), "reused": True}
-
     if target.exists():
         _remove_failed_target(target)
 
-    clone_url = f"https://github.com/{repo}.git"
     command = ["git", "clone", "--depth", "1"]
     if ref:
         command.extend(["--branch", ref])
-    command.extend([clone_url, str(target)])
+    command.extend([f"https://github.com/{repo}.git", str(target)])
 
     env = os.environ.copy()
     token = str((load_connection() or {}).get("access_token") or "").strip()
@@ -83,7 +78,6 @@ async def prepare_repository_workspace(repository: str, ref: str | None = None) 
 
     if result.returncode != 0:
         _remove_failed_target(target)
-        error = result.stderr[-4000:]
-        raise RuntimeError(f"Could not prepare repository workspace (git clone exited {result.returncode}): {error}")
+        raise RuntimeError(f"Could not prepare repository workspace (git clone exited {result.returncode}): {result.stderr[-4000:]}")
 
     return {"repository": repo, "ref": ref, "workspace": str(target), "reused": False, "output": result.stdout[-1000:]}
