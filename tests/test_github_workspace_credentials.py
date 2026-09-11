@@ -2,7 +2,7 @@ from pathlib import Path
 from subprocess import CompletedProcess
 
 
-def test_workspace_clone_uses_ephemeral_git_auth(monkeypatch, tmp_path):
+def test_workspace_clone_uses_private_runtime_root(monkeypatch, tmp_path):
     from tools.git import workspace
 
     monkeypatch.setattr(
@@ -27,8 +27,10 @@ def test_workspace_clone_uses_ephemeral_git_auth(monkeypatch, tmp_path):
     monkeypatch.setattr(workspace, "_run_process", fake_run_process)
     result = __import__("asyncio").run(workspace.prepare_repository_workspace("tirth1207/friday"))
 
+    expected_root = tmp_path / "workspaces"
     assert result["repository"] == "tirth1207/friday"
-    assert result["workspace"].startswith(str(tmp_path / "workspaces"))
+    assert Path(result["workspace"]).parent == expected_root
+    assert ".friday" not in Path(result["workspace"]).parts
     assert "secret-test-token" not in " ".join(map(str, captured["command"]))
     assert captured["env"]["FRIDAY_GITHUB_TOKEN"] == "secret-test-token"
     assert captured["env"]["GIT_TERMINAL_PROMPT"] == "0"
