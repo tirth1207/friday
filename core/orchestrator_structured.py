@@ -289,15 +289,15 @@ async def _run_github_repository_agent(user_message: str, resolved_request: str,
 
 
 async def ask_friday(user_message: str, repository: str | None = None) -> str:
-    resolved_request = await resolve_request(user_message)
-    recent_messages = memory_store.get_recent_messages(12)
+    # resolve_request is intentionally synchronous: it reads in-memory context and returns a dict.
+    # Awaiting it causes the exact runtime failure "object dict can't be used in 'await' expression".
+    context = resolve_request(user_message)
+    resolved_request = context["resolved_request"]
+    recent_messages = context.get("recent_messages") or memory_store.get_recent_messages(12)
     if _is_github_repository_list_request(user_message):
         return await _format_repository_list()
     if _is_environment_key_request(user_message):
         return await _format_env_key_result(user_message)
     if is_tool_required(user_message):
         return await _run_structured_agent(user_message, resolved_request, recent_messages, repository)
-    # The legacy orchestrator exposes answer_conversationally(message, conversation_context).
-    # Keep this boundary explicit so a repository attachment cannot leak into the wrong
-    # call signature and produce a runtime TypeError on ordinary chat messages.
     return await answer_conversationally(user_message, recent_messages)
