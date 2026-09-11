@@ -104,6 +104,42 @@ def _provider_error_message(error: Exception) -> str:
     return f"FRIDAY's NVIDIA provider request failed ({error_type}): {error_text or 'unknown provider error'}"
 
 
+def _developer_response(result: dict, repository: str | None) -> str:
+    """Turn execution evidence into a concise, user-facing delivery report."""
+    repo = result.get("repository") or repository or "workspace"
+    summary = str(result.get("summary") or "Developer task completed.").strip()
+    if result.get("delivery_error"):
+        summary = "I completed the implementation, but delivery did not finish successfully."
+
+    lines = ["## Developer Agent", "", summary, ""]
+    lines.append(f"**Repository:** `{repo}`")
+
+    commit = result.get("commit_evidence")
+    push = result.get("push_evidence")
+    if result.get("committed") and isinstance(commit, dict):
+        sha = str(commit.get("commit_sha") or "")
+        lines.append(f"**Commit:** `{sha[:10]}` — {commit.get('message', 'changes committed')}")
+    elif result.get("committed"):
+        lines.append("**Commit:** completed")
+
+    if result.get("pushed") and isinstance(push, dict):
+        branch = push.get("branch") or "current branch"
+        sha = str(push.get("remote_sha") or push.get("commit_sha") or "")
+        lines.append(f"**Push:** `{branch}` updated successfully · `{sha[:10]}`")
+    elif result.get("delivery_error"):
+        error = str(result.get("delivery_error"))
+        lines.append(f"**Push:** failed — {error}")
+
+    if result.get("verified"):
+        lines.append("**Verification:** passed")
+    else:
+        lines.append("**Verification:** not confirmed")
+
+    lines.append("")
+    lines.append("_FRIDAY inspected the repository context first and used the existing project structure for the change._")
+    return "\n".join(lines)
+
+
 @app.on_event("startup")
 async def startup() -> None:
     if await refresh_connection_if_needed():
@@ -228,17 +264,8 @@ async def chat(request: ChatRequest):
 
         if _is_explicit_build_request(request.message):
             from core.agents.developer_loop import DeveloperLoop
-            result = await DeveloperLoop(max_iterations=4, allow_mutations=True).run(request.message, repository)
-            response = (
-                "## Developer Agent\n\n"
-                f"{result.get('summary', 'Engineering loop completed.')}\n\n"
-                f"- Repository: `{result.get('repository') or repository or 'workspace'}`\n"
-                f"- Iterations: `{result.get('iterations', 0)}`\n"
-                f"- Verified: `{result.get('verified', False)}`\n"
-                f"- Committed: `{result.get('committed', False)}`\n"
-                f"- Pushed: `{result.get('pushed', False)}`\n"
-                f"- Changes enabled: `{result.get('mutations_enabled', True)}`"
-            )
+            result = await DeveloperLoop(max_iterations=6, allow_mutations=True).run(request.message, repository)
+            response = _developer_response(result, repository)
             memory_store.add_message("user", request.message)
             memory_store.add_message("assistant", response)
             return {"response": response, "repository": repository, "developer_run": result}
