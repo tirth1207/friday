@@ -28,6 +28,7 @@ def test_workspace_clone_uses_ephemeral_git_auth(monkeypatch, tmp_path):
     result = __import__("asyncio").run(workspace.prepare_repository_workspace("tirth1207/friday"))
 
     assert result["repository"] == "tirth1207/friday"
+    assert result["workspace"].startswith(str(tmp_path / "workspaces"))
     assert "secret-test-token" not in " ".join(map(str, captured["command"]))
     assert captured["env"]["FRIDAY_GITHUB_TOKEN"] == "secret-test-token"
     assert captured["env"]["GIT_TERMINAL_PROMPT"] == "0"
