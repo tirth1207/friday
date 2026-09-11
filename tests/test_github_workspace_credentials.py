@@ -1,4 +1,5 @@
 from pathlib import Path
+from subprocess import CompletedProcess
 
 
 def test_workspace_clone_uses_ephemeral_git_auth(monkeypatch, tmp_path):
@@ -14,22 +15,16 @@ def test_workspace_clone_uses_ephemeral_git_auth(monkeypatch, tmp_path):
         "load_connection",
         lambda: {"access_token": "secret-test-token"},
     )
+    monkeypatch.setattr(workspace.settings, "friday_workspace", str(tmp_path))
 
     captured = {}
 
-    async def fake_create_subprocess_exec(*command, **kwargs):
+    def fake_run_process(command, **kwargs):
         captured["command"] = command
         captured["env"] = kwargs["env"]
+        return CompletedProcess(command, 0, stdout="", stderr="")
 
-        class Process:
-            returncode = 0
-
-            async def communicate(self):
-                return b"", b""
-
-        return Process()
-
-    monkeypatch.setattr(workspace.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(workspace, "_run_process", fake_run_process)
     result = __import__("asyncio").run(workspace.prepare_repository_workspace("tirth1207/friday"))
 
     assert result["repository"] == "tirth1207/friday"
