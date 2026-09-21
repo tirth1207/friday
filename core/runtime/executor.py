@@ -17,14 +17,17 @@ class ToolExecutor:
         agent: str = "Developer Agent",
         confirmed: bool = False,
     ) -> Any:
-        tool_func = tool_registry.get_tool(tool_name)
-        tool_meta = tool_registry.get_metadata(tool_name)
+        requested_name = str(tool_name or "").strip()
+        canonical_name = tool_registry.resolve_name(requested_name)
 
-        if not tool_func or not tool_meta:
-            error_msg = f"Unknown tool requested: '{tool_name}'"
-            await agent_runtime.tool_error(agent=agent, tool=tool_name, description=error_msg, metadata={"error": error_msg})
+        if canonical_name is None:
+            error_msg = f"Unknown tool requested: '{requested_name}'"
+            await agent_runtime.tool_error(agent=agent, tool=requested_name, description=error_msg, metadata={"error": error_msg})
             raise ValueError(error_msg)
 
+        tool_name = canonical_name
+        tool_func = tool_registry.get_tool(tool_name)
+        tool_meta = tool_registry.get_metadata(tool_name)
         required_permission = tool_meta.permission
         if tool_name == "github.api" and str(arguments.get("method", "GET")).upper() == "GET":
             required_permission = PermissionLevel.SAFE
