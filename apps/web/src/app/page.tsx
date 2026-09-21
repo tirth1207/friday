@@ -146,6 +146,8 @@ export default function App() {
   const reconnectRef = useRef<number | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const messagesRef = useRef<Message[]>([]);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
 
   const loadWorkspace = useCallback(async () => {
     try {
@@ -210,7 +212,7 @@ export default function App() {
               });
 
               setProactiveNotification((current) => {
-                if (messages.length > 0) return null;
+                if (messagesRef.current.length > 0) return null;
                 return current?.id === event.id ? current : event;
               });
             }
