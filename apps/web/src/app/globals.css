@@ -74,3 +74,8 @@ html[data-theme="light"] ::-webkit-scrollbar-thumb:hover { background: rgba(15, 
 
 /* Repository selection is now an explicit chat attachment via the + context control. */
 .rounded-2xl:has(> div > select) { display: none !important; }
+
+
+/* FRIDAY UI surfaces follow the active theme. */
+html[data-theme="light"] .bg-\\[\\#090a0d\\] { background: var(--surface) !important; }
+html[data-theme="light"] .bg-\\[\\#07080b\\] { background: var(--surface) !important; }
