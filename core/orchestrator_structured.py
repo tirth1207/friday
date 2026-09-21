@@ -26,7 +26,7 @@ from core.runtime.executor import tool_executor
 from core.runtime.langchain_tools import get_langchain_tools, registry_tool_name, serialize_tool_result
 from providers.nvidia.client import get_model
 from tools.github.repository_agent import github_analyze_repository
-from tools.osiris.osiris_tools import osiris_news, osiris_weather
+from tools.osiris.osiris_tools import osiris_news, osiris_weather, osiris_conflicts, osiris_earthquakes, osiris_fires
 
 
 SYSTEM_PROMPT = """
@@ -301,7 +301,16 @@ async def _run_osiris_live_request(user_message: str) -> str:
     """Fetch OSIRIS first, then synthesize the live result."""
     text = (user_message or "").lower()
     try:
-        result = await osiris_weather() if "weather" in text else await osiris_news(query=user_message)
+        if "weather" in text:
+            result = await osiris_weather()
+        elif any(term in text for term in ("war", "conflict", "frontline", "fighting", "attack")):
+            result = await osiris_conflicts()
+        elif any(term in text for term in ("earthquake", "earthquakes", "quake", "tsunami")):
+            result = await osiris_earthquakes()
+        elif any(term in text for term in ("wildfire", "wildfires", "forest fire", "forest fires")):
+            result = await osiris_fires()
+        else:
+            result = await osiris_news(query=user_message)
     except Exception:
         return await _run_structured_agent(user_message, user_message, memory_store.get_recent_messages(12), None)
 
