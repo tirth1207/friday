@@ -21,6 +21,7 @@ from core.proactive.runtime import proactive_runtime
 from core.proactive.interests import interest_store
 from core.orchestrator_structured import ask_friday
 from services.api.websocket import friday_websocket
+from providers.nvidia.health import snapshot as nvidia_health_snapshot
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -161,6 +162,12 @@ async def startup() -> None:
 @app.on_event("shutdown")
 async def shutdown() -> None:
     await proactive_runtime.stop()
+
+
+@app.get("/health/providers")
+async def provider_health():
+    """Expose non-sensitive provider health for the FRIDAY UI and diagnostics."""
+    return {"providers": {"nvidia": nvidia_health_snapshot()}}
 
 
 @app.get("/")
