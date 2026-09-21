@@ -52,6 +52,9 @@ type GithubStatus = {
   login?: string;
 };
 
+type ToolItem = { name: string; description: string; permission?: string; };
+type ToolGroup = { name: string; tools: ToolItem[]; };
+
 const API = process.env.NEXT_PUBLIC_FRIDAY_API_URL || "http://127.0.0.1:8000";
 const WS = process.env.NEXT_PUBLIC_FRIDAY_WS_URL || "ws://127.0.0.1:8000/ws";
 const starterPrompts = [
@@ -95,7 +98,7 @@ function MarkdownMessage({ content }: { content: string }) {
           a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer" className="text-blue-400 underline underline-offset-4">{children}</a>,
           blockquote: ({ children }) => <blockquote className="my-5 border-l-2 border-blue-500/50 pl-4 italic text-white/50">{children}</blockquote>,
           code: ({ className, children }) => className ? (
-            <pre className="my-5 overflow-x-auto rounded-xl border border-white/10 bg-[#080a0e] p-4"><code className="font-mono text-[12px] leading-6 text-white/75">{String(children).replace(/\n$/, "")}</code></pre>
+            <pre className="my-5 overflow-x-auto rounded-xl border border-white/10 bg-[var(--surface-elevated)] p-4"><code className="font-mono text-[12px] leading-6 text-white/75">{String(children).replace(/\n$/, "")}</code></pre>
           ) : (
             <code className="rounded bg-white/[0.07] px-1.5 py-0.5 font-mono text-[12px] text-blue-300">{children}</code>
           ),
@@ -114,7 +117,7 @@ function Trace({ events, open, onToggle, onClear }: { events: FridayEvent[]; ope
   if (!events.length) return null;
   const active = events.filter((e) => e.status === "running" || e.type === "thinking" || e.type === "tool_started").length;
   return (
-    <aside className={cn("fixed bottom-4 right-4 z-50 overflow-hidden rounded-2xl border border-white/10 bg-[#0b0d11]/95 shadow-2xl backdrop-blur-xl", open ? "w-[min(400px,calc(100vw-2rem))]" : "w-auto")}>
+    <aside className={cn("fixed bottom-4 right-4 z-50 overflow-hidden rounded-2xl border border-white/10 bg-[var(--surface)]/95 shadow-2xl backdrop-blur-xl", open ? "w-[min(400px,calc(100vw-2rem))]" : "w-auto")}>
       <div className="flex items-center gap-2 p-2.5">
         <button onClick={onToggle} className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl px-2 py-1.5 text-left hover:bg-white/[0.04]">
           <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-blue-500/20 bg-blue-500/10 text-blue-400"><Activity size={14} /></div>
@@ -141,6 +144,7 @@ export default function App() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [apiHealthy, setApiHealthy] = useState<boolean | null>(null);
+  const [tools, setTools] = useState<ToolGroup[]>([]);
   const [proactiveNotification, setProactiveNotification] = useState<FridayEvent | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef<number | null>(null);
@@ -151,14 +155,19 @@ export default function App() {
 
   const loadWorkspace = useCallback(async () => {
     try {
-      const [statusResponse, historyResponse] = await Promise.all([
+      const [statusResponse, historyResponse, toolsResponse] = await Promise.all([
         fetch(`${API}/auth/github/status`, { cache: "no-store" }),
         fetch(`${API}/conversations?limit=80`, { cache: "no-store" }),
+        fetch(`${API}/tools`, { cache: "no-store" }),
       ]);
       if (statusResponse.ok) setGithub(await statusResponse.json());
       if (historyResponse.ok) {
         const d = await historyResponse.json();
         setHistory(Array.isArray(d.conversations) ? d.conversations : []);
+      }
+      if (toolsResponse.ok) {
+        const d = await toolsResponse.json();
+        setTools(Array.isArray(d.groups) ? d.groups : []);
       }
     } catch {
       // The health indicator below owns connectivity state.
@@ -280,11 +289,11 @@ export default function App() {
   const visibleHistory = useMemo(() => history.filter((x) => x.role === "user"), [history]);
 
   return (
-    <main className="min-h-screen bg-[#050608] text-white">
+    <main className="min-h-screen bg-[var(--background)] text-white">
       {proactiveNotification && (
         <button
           onClick={openProactiveNotification}
-          className="fixed right-4 top-16 z-[60] w-[min(380px,calc(100vw-2rem))] rounded-2xl border border-blue-500/20 bg-[#0b0d11]/95 p-4 text-left shadow-2xl backdrop-blur-xl transition hover:border-blue-400/35 hover:bg-[#0d1016]"
+          className="fixed right-4 top-16 z-[60] w-[min(380px,calc(100vw-2rem))] rounded-2xl border border-blue-500/20 bg-[var(--surface)]/95 p-4 text-left shadow-2xl backdrop-blur-xl transition hover:border-blue-400/35 hover:bg-[#0d1016]"
         >
           <div className="flex items-start gap-3">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-blue-500/20 bg-blue-500/10">
@@ -304,7 +313,7 @@ export default function App() {
       )}
 
       <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_50%_-10%,rgba(37,99,235,.10),transparent_40%)]" />
-      <header className="fixed left-0 right-0 top-0 z-40 h-14 border-b border-white/[0.07] bg-[#07080b]/90 backdrop-blur-xl">
+      <header className="fixed left-0 right-0 top-0 z-40 h-14 border-b border-white/[0.07] bg-[var(--surface)]/90 backdrop-blur-xl">
         <div className="flex h-full items-center gap-2 px-3">
           <button onClick={() => setLeftOpen((v) => !v)} className="hidden rounded-lg p-2 text-white/35 hover:bg-white/[0.05] md:block" title="Toggle conversations">{leftOpen ? <PanelLeft size={16} /> : <Menu size={16} />}</button>
           <button onClick={() => setMobileLeft(true)} className="rounded-lg p-2 text-white/35 md:hidden"><Menu size={17} /></button>
@@ -318,7 +327,7 @@ export default function App() {
       </header>
 
       <div className="flex min-h-screen pt-14">
-        <aside className={cn("fixed bottom-0 left-0 top-14 z-30 border-r border-white/[0.07] bg-[#090a0d]/95 backdrop-blur-xl transition-all duration-200 md:sticky md:top-14 md:h-[calc(100vh-3.5rem)]", leftOpen ? "w-64" : "w-0 overflow-hidden", mobileLeft ? "translate-x-0" : "-translate-x-full md:translate-x-0")}>
+        <aside className={cn("fixed bottom-0 left-0 top-14 z-30 border-r border-white/[0.07] bg-[var(--surface)]/95 backdrop-blur-xl transition-all duration-200 md:sticky md:top-14 md:h-[calc(100vh-3.5rem)]", leftOpen ? "w-64" : "w-0 overflow-hidden", mobileLeft ? "translate-x-0" : "-translate-x-full md:translate-x-0")}>
           {leftOpen && <div className="flex h-full w-64 flex-col">
             <div className="flex items-center justify-between px-3 py-3"><span className="text-[10px] font-medium uppercase tracking-[0.18em] text-white/30">Conversations</span><button onClick={newChat} className="rounded-md p-1.5 text-white/25 hover:bg-white/[0.05]"><Plus size={14} /></button></div>
             <div className="flex-1 overflow-y-auto px-2">
@@ -351,14 +360,22 @@ export default function App() {
           </div>
         </section>
 
-        <aside className={cn("fixed bottom-0 right-0 top-14 z-30 border-l border-white/[0.07] bg-[#090a0d]/95 backdrop-blur-xl transition-all duration-200 md:sticky md:top-14 md:h-[calc(100vh-3.5rem)]", rightOpen ? "w-64" : "w-0 overflow-hidden")}>
-          {rightOpen && <div className="flex h-full w-64 flex-col"><div className="flex items-center justify-between px-3 py-3"><span className="text-[10px] font-medium uppercase tracking-[0.18em] text-white/30">Tools</span><button onClick={() => setRightOpen(false)} className="rounded-md p-1.5 text-white/25 hover:bg-white/[0.05]"><X size={13} /></button></div><div className="flex flex-1 flex-col items-center justify-center px-6 text-center"><div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl border border-white/[0.07] bg-white/[0.025]"><Wrench size={16} className="text-white/25" /></div><div className="text-[11px] text-white/45">Tool workspace</div><p className="mt-1 text-[9px] leading-4 text-white/20">Intentionally empty for now. Future FRIDAY tools can live here.</p></div></div>}
+        <aside className={cn("fixed bottom-0 right-0 top-14 z-30 border-l border-white/[0.07] bg-[var(--surface)]/95 backdrop-blur-xl transition-all duration-200 md:sticky md:top-14 md:h-[calc(100vh-3.5rem)]", rightOpen ? "w-72" : "w-0 overflow-hidden")}>
+          {rightOpen && <div className="flex h-full w-72 flex-col">
+            <div className="flex items-center justify-between border-b border-white/[0.07] px-3 py-3">
+              <div><div className="text-[10px] font-medium uppercase tracking-[0.18em] text-white/40">Capabilities</div><div className="mt-1 text-[9px] text-white/20">{tools.reduce((n, g) => n + g.tools.length, 0)} registered tools</div></div>
+              <button onClick={() => setRightOpen(false)} className="rounded-md p-1.5 text-white/30 hover:bg-white/[0.05]"><X size={13} /></button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-2 py-2">
+              {tools.length ? tools.map((group) => <div key={group.name} className="mb-4"><div className="px-2 pb-1.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-blue-400/70">{group.name}</div><div className="space-y-0.5">{group.tools.map((tool) => <div key={tool.name} className="rounded-lg px-2.5 py-2 transition hover:bg-white/[0.04]"><div className="flex items-center gap-2"><Wrench size={10} className="shrink-0 text-white/20" /><span className="min-w-0 flex-1 truncate font-mono text-[9px] text-white/60">{tool.name}</span><span className={cn("shrink-0 rounded-full px-1.5 py-0.5 text-[7px] uppercase tracking-wider", tool.permission === "approval" ? "bg-amber-400/10 text-amber-300/70" : "bg-emerald-400/10 text-emerald-300/70")}>{tool.permission === "approval" ? "approval" : "safe"}</span></div><p className="ml-5 mt-1 line-clamp-2 text-[8px] leading-4 text-white/25">{tool.description}</p></div>)}</div></div>) : <div className="flex h-full flex-col items-center justify-center px-6 text-center"><Wrench size={16} className="mb-3 text-white/25" /><div className="text-[11px] text-white/45">Loading capabilities…</div></div>}
+            </div>
+          </div>}
         </aside>
       </div>
 
       <footer className="fixed bottom-0 left-0 right-0 z-20 bg-gradient-to-t from-[#050608] via-[#050608]/95 to-transparent pt-8">
         <div className="mx-auto max-w-3xl px-4 pb-4 sm:px-6">
-          <div className="rounded-2xl border border-white/[0.09] bg-[#0b0d11]/95 p-2 shadow-2xl backdrop-blur-xl"><div className="flex items-end gap-2"><textarea ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={keyDown} rows={1} placeholder="Ask FRIDAY anything…" className="max-h-44 min-h-11 flex-1 resize-none bg-transparent px-3 py-2.5 text-[13px] leading-6 text-white outline-none placeholder:text-white/20" /><button onClick={sendMessage} disabled={!input.trim() || loading} className="mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-white/[0.05] disabled:text-white/20"><Send size={15} /></button></div><div className="px-3 pb-1 pt-1 text-[8px] text-white/15">Enter to send · Shift+Enter for newline</div></div>
+          <div className="rounded-2xl border border-white/[0.09] bg-[var(--surface)]/95 p-2 shadow-2xl backdrop-blur-xl"><div className="flex items-end gap-2"><textarea ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={keyDown} rows={1} placeholder="Ask FRIDAY anything…" className="max-h-44 min-h-11 flex-1 resize-none bg-transparent px-3 py-2.5 text-[13px] leading-6 text-white outline-none placeholder:text-white/20" /><button onClick={sendMessage} disabled={!input.trim() || loading} className="mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-white/[0.05] disabled:text-white/20"><Send size={15} /></button></div><div className="px-3 pb-1 pt-1 text-[8px] text-white/15">Enter to send · Shift+Enter for newline</div></div>
         </div>
       </footer>
 
