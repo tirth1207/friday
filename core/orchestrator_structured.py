@@ -232,6 +232,17 @@ async def _execute_structured_tool(tool_name: str, arguments: dict[str, Any], to
 
 async def _run_structured_agent(user_message: str, resolved_request: str, recent_messages: list[dict[str, str]], selected_repository: str | None = None) -> str:
     langchain_tools = [tool for tool in get_langchain_tools() if tool.name != "developer__run"]
+
+    # Research/live requests must stay inside the research/intelligence surface.
+    # A stale repository observation must never cause a filesystem/GitHub action
+    # to leak into an unrelated news or current-information request.
+    research_only = "CURRENT RESEARCH TASK" in resolved_request or _is_live_intelligence_request(user_message)
+    if research_only:
+        langchain_tools = [
+            tool for tool in langchain_tools
+            if registry_tool_name(tool.name).startswith(("research.", "osiris."))
+        ]
+
     tool_by_model_name = {tool.name: tool for tool in langchain_tools}
     model = get_model(require_tools=True).bind_tools(langchain_tools)
     request_repository = _extract_repository_target(user_message, resolved_request, selected_repository)
