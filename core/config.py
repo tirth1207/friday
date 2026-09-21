@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     # cloned below it and developer tools are scoped to those clones.
     friday_workspace: str = get_default_workspace()
 
+    proactive_enabled: bool = True
+    proactive_cognition_enabled: bool = True
+    proactive_cognition_interval_seconds: int = 3600
+    proactive_initial_delay_seconds: int = 60
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_prefix="FRIDAY_",
