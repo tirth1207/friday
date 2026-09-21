@@ -33,11 +33,28 @@ class ToolRegistry:
             parameters=parameters or {},
         )
 
+    @staticmethod
+    def canonical_name(name: str) -> str:
+        """Normalize provider-safe tool names back to FRIDAY's canonical dotted ID."""
+        value = str(name or "").strip()
+        if "__" in value and "." not in value:
+            value = value.replace("__", ".")
+        return value
+
+    def resolve_name(self, name: str) -> str | None:
+        """Resolve a canonical or provider-safe tool name to a registered tool ID."""
+        canonical = self.canonical_name(name)
+        if canonical in self._tools:
+            return canonical
+        return None
+
     def get_tool(self, name: str) -> Callable[..., Coroutine[Any, Any, Any]] | None:
-        return self._tools.get(name)
+        canonical = self.resolve_name(name)
+        return self._tools.get(canonical) if canonical else None
 
     def get_metadata(self, name: str) -> ToolMetadata | None:
-        return self._metadata.get(name)
+        canonical = self.resolve_name(name)
+        return self._metadata.get(canonical) if canonical else None
 
     def list_tools(self) -> list[dict[str, Any]]:
         return [meta.model_dump() for meta in self._metadata.values()]
