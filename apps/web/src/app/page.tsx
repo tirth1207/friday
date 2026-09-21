@@ -141,6 +141,7 @@ export default function App() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [apiHealthy, setApiHealthy] = useState<boolean | null>(null);
+  const [proactiveNotification, setProactiveNotification] = useState<FridayEvent | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef<number | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -185,8 +186,34 @@ export default function App() {
         socketRef.current = ws;
         ws.onmessage = (e) => {
           try {
-            const event = JSON.parse(e.data);
-            if (event?.id) setEvents((prev) => prev.some((x) => x.id === event.id) ? prev : [...prev, event]);
+            const event = JSON.parse(e.data) as FridayEvent;
+            if (!event?.id) return;
+
+            setEvents((prev) => prev.some((x) => x.id === event.id) ? prev : [...prev, event]);
+
+            if (event.type === "proactive_message") {
+              const proactiveContent = event.description || event.title;
+              const proactiveMessage: Message = {
+                id: `proactive-${event.id}`,
+                role: "assistant",
+                content: proactiveContent,
+                createdAt: new Date(event.timestamp || Date.now()).getTime(),
+              };
+
+              setMessages((current) => {
+                if (current.length > 0) {
+                  return current.some((message) => message.id === proactiveMessage.id)
+                    ? current
+                    : [...current, proactiveMessage];
+                }
+                return current;
+              });
+
+              setProactiveNotification((current) => {
+                if (messages.length > 0) return null;
+                return current?.id === event.id ? current : event;
+              });
+            }
           } catch {}
         };
         ws.onclose = () => { if (!stopped) reconnectRef.current = window.setTimeout(connect, 3000); };
@@ -230,12 +257,50 @@ export default function App() {
     }
   }
 
-  function newChat() { setMessages([]); setEvents([]); setInput(""); }
+  function newChat() { setMessages([]); setEvents([]); setInput(""); setProactiveNotification(null); }
+
+  function openProactiveNotification() {
+    if (!proactiveNotification) return;
+    const proactiveMessage: Message = {
+      id: `proactive-${proactiveNotification.id}`,
+      role: "assistant",
+      content: proactiveNotification.description || proactiveNotification.title,
+      createdAt: new Date(proactiveNotification.timestamp || Date.now()).getTime(),
+    };
+    setMessages((current) => current.some((message) => message.id === proactiveMessage.id)
+      ? current
+      : [...current, proactiveMessage]);
+    setProactiveNotification(null);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }
+
   function keyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }
   const visibleHistory = useMemo(() => history.filter((x) => x.role === "user"), [history]);
 
   return (
     <main className="min-h-screen bg-[#050608] text-white">
+      {proactiveNotification && (
+        <button
+          onClick={openProactiveNotification}
+          className="fixed right-4 top-16 z-[60] w-[min(380px,calc(100vw-2rem))] rounded-2xl border border-blue-500/20 bg-[#0b0d11]/95 p-4 text-left shadow-2xl backdrop-blur-xl transition hover:border-blue-400/35 hover:bg-[#0d1016]"
+        >
+          <div className="flex items-start gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-blue-500/20 bg-blue-500/10">
+              <Zap size={15} className="text-blue-400" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="mb-1 flex items-center gap-2">
+                <span className="text-[10px] font-semibold tracking-[0.14em] text-blue-400">FRIDAY</span>
+                <span className="text-[9px] text-white/20">UPDATE</span>
+              </div>
+              <div className="text-[12px] font-medium text-white/80">{proactiveNotification.title}</div>
+              <div className="mt-1 line-clamp-2 text-[11px] leading-5 text-white/40">{proactiveNotification.description}</div>
+              <div className="mt-2 text-[9px] text-blue-400/60">Click to open in chat →</div>
+            </div>
+          </div>
+        </button>
+      )}
+
       <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_50%_-10%,rgba(37,99,235,.10),transparent_40%)]" />
       <header className="fixed left-0 right-0 top-0 z-40 h-14 border-b border-white/[0.07] bg-[#07080b]/90 backdrop-blur-xl">
         <div className="flex h-full items-center gap-2 px-3">
