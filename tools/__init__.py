@@ -133,3 +133,8 @@ def register_all_tools():
     tool_registry.register(name="self.inspect", func=self_inspect, description="Inspect FRIDAY source and tests without modifying files.", permission=PermissionLevel.SAFE)
     tool_registry.register(name="self.file.read", func=self_read_file, description="Read a non-sensitive FRIDAY source/config file.", permission=PermissionLevel.SAFE, parameters={"path": "string"})
     tool_registry.register(name="cognition.learn", func=learn_experience, description="Store a reusable lesson, decision, failure, pattern, or preference learned from completed work.", permission=PermissionLevel.SAFE, parameters={"kind": "string", "title": "string", "lesson": "string", "context": "string"})
+
+# Register the complete capability surface when the tools package is imported.
+# Keeping registration here guarantees every runtime entry point sees the same
+# canonical registry instead of relying on import-order side effects.
+register_all_tools()
