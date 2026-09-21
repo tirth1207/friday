@@ -15,6 +15,8 @@ from core.github_oauth import (
 )
 from core.github_repositories import list_selectable_repositories
 from core.memory import memory_store
+from core.events import FridayEvent
+from core.proactive.runtime import proactive_runtime
 from core.orchestrator_structured import ask_friday
 from services.api.websocket import friday_websocket
 
@@ -145,11 +147,61 @@ def _developer_response(result: dict, repository: str | None) -> str:
 async def startup() -> None:
     if await refresh_connection_if_needed():
         print("[FRIDAY GitHub] Restored GitHub App user connection")
+    await proactive_runtime.start()
+
+
+@app.on_event("shutdown")
+async def shutdown() -> None:
+    await proactive_runtime.stop()
 
 
 @app.get("/")
 async def root():
-    return {"name": "FRIDAY", "status": "online", "version": "0.3.0"}
+    return {"name": "FRIDAY", "status": "online", "version": "0.4.0", "proactive": True}
+
+
+@app.get("/proactive/messages")
+async def proactive_messages(limit: int = 30):
+    return {"messages": proactive_runtime.engine.attention.recent(limit)}
+
+
+@app.post("/proactive/check")
+async def proactive_check():
+    """Run one bounded cognition cycle immediately."""
+    return {"message": await proactive_runtime.cognition.cycle()}
+
+
+@app.post("/proactive/attention-test")
+async def proactive_attention_test():
+    """Emit a synthetic notification so the UI can verify proactive delivery."""
+    from core.proactive.attention import AttentionManager
+    from core.proactive.models import ProactiveSignal
+    from services.event_bus.bus import event_bus
+
+    signal = ProactiveSignal(
+        source="test",
+        kind="manual",
+        title="FRIDAY notification test",
+        summary="FRIDAY proactive messaging is connected.",
+        importance=1.0,
+        urgency=1.0,
+        relevance=1.0,
+        confidence=1.0,
+        dedupe_key=f"manual-test-{asyncio.get_running_loop().time()}",
+    )
+    decision = proactive_runtime.engine.attention.evaluate(signal)
+    message = proactive_runtime.engine.attention.record(signal, decision)
+    if message:
+        await event_bus.publish(
+            FridayEvent(
+                type="proactive_message",
+                title=message.title,
+                description=message.message,
+                status=message.level.value,
+                metadata={"message_id": message.id, "source": message.source},
+            )
+        )
+    return {"message": message.model_dump(mode="json") if message else None}
 
 
 @app.get("/health")
