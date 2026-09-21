@@ -16,6 +16,7 @@ EventType = Literal[
     "tool_error",
     "verification",
     "message",
+    "proactive_message",
     "error",
 ]
 
