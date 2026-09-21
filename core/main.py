@@ -16,6 +16,7 @@ from core.github_oauth import (
 from core.github_repositories import list_selectable_repositories
 from core.memory import memory_store
 from core.events import FridayEvent
+from core.runtime.registry import tool_registry
 from core.proactive.runtime import proactive_runtime
 from core.proactive.interests import interest_store
 from core.orchestrator_structured import ask_friday
@@ -231,6 +232,20 @@ async def proactive_attention_test():
         )
     return {"message": message.model_dump(mode="json") if message else None}
 
+
+@app.get("/tools")
+async def tools_catalog():
+    """Expose the live registered tool catalog to the FRIDAY UI."""
+    tools = tool_registry.list_tools()
+    groups: dict[str, list[dict[str, object]]] = {}
+    for tool in tools:
+        name = str(tool.get("name", ""))
+        prefix = name.split(".", 1)[0] if "." in name else "core"
+        groups.setdefault(prefix, []).append(tool)
+    ordered = ["filesystem", "terminal", "git", "github", "research", "browser", "os", "osiris", "memory", "cognition", "agent", "self", "music", "developer", "core"]
+    result_groups = [{"name": group, "tools": sorted(groups[group], key=lambda item: str(item.get("name", "")))} for group in ordered if group in groups]
+    result_groups.extend({"name": group, "tools": sorted(items, key=lambda item: str(item.get("name", "")))} for group, items in sorted(groups.items()) if group not in ordered)
+    return {"groups": result_groups, "count": len(tools)}
 
 @app.get("/health")
 async def health():
