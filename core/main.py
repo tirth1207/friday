@@ -23,7 +23,7 @@ from services.api.websocket import friday_websocket
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
-app = FastAPI(title="FRIDAY", description="Personal AI Operating Layer", version="0.3.0")
+app = FastAPI(title="FRIDAY", description="Personal AI Operating Layer", version="0.4.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173"],
