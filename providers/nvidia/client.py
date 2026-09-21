@@ -11,6 +11,7 @@ from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from core.memory.memory import memory_store
 from core.skills import skill_engine
 from .config import settings
+from .health import nvidia_health
 
 
 DEFAULT_HOSTED_MODEL = "nvidia/nemotron-3-super-120b-a12b"
@@ -101,12 +102,15 @@ class FridayAgentModel:
                 result = await asyncio.to_thread(self._model.invoke, payload, config=config, **kwargs)
                 if inspect.isawaitable(result):
                     result = await result
+                nvidia_health.record_success()
                 return result
             except Exception as error:
                 last_error = error
+                nvidia_health.record_failure(error)
                 if attempt >= _PROVIDER_RETRIES or not self._is_transient(error):
                     raise
-                await asyncio.sleep(1.5 * (attempt + 1))
+                # Exponential backoff avoids hammering a provider during a transient outage.
+                await asyncio.sleep(1.5 * (2 ** attempt))
         raise last_error or RuntimeError("NVIDIA provider request failed")
 
     def invoke(self, value: Any, config: Any = None, **kwargs: Any):
