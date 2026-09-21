@@ -17,6 +17,7 @@ from core.github_repositories import list_selectable_repositories
 from core.memory import memory_store
 from core.events import FridayEvent
 from core.proactive.runtime import proactive_runtime
+from core.proactive.interests import interest_store
 from core.orchestrator_structured import ask_friday
 from services.api.websocket import friday_websocket
 
@@ -39,6 +40,12 @@ class ChatRequest(BaseModel):
 
 class RepositoryContextRequest(BaseModel):
     repository: str | None = None
+
+
+class ProactiveInterestRequest(BaseModel):
+    topic: str
+    keywords: list[str] = []
+    interval_seconds: int = 900
 
 
 _FILE_EXTENSION_RE = re.compile(r"\.[A-Za-z0-9]{1,6}$")
@@ -158,6 +165,27 @@ async def shutdown() -> None:
 @app.get("/")
 async def root():
     return {"name": "FRIDAY", "status": "online", "version": "0.4.0", "proactive": True}
+
+
+@app.get("/proactive/interests")
+async def proactive_interests():
+    return {"interests": [item.__dict__ for item in interest_store.list()]}
+
+
+@app.post("/proactive/interests")
+async def add_proactive_interest(request: ProactiveInterestRequest):
+    interest = interest_store.add(
+        request.topic,
+        request.keywords or [request.topic],
+        request.interval_seconds,
+    )
+    return {"interest": interest.__dict__}
+
+
+@app.delete("/proactive/interests/{topic}")
+async def remove_proactive_interest(topic: str):
+    interest_store.remove(topic)
+    return {"removed": topic}
 
 
 @app.get("/proactive/messages")
