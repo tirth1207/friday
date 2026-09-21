@@ -51,12 +51,46 @@ class MemoryStore:
             conn.execute("INSERT INTO conversation_history (role, content) VALUES (?, ?)", (role, content))
             conn.commit()
 
+    @staticmethod
+    def _is_internal_trace(content: str) -> bool:
+        """Exclude agent/tool traces from conversational context.
+
+        Tool execution traces are useful for debugging, but they are not user
+        memory. Feeding them back into the model makes old actions look like
+        current instructions and can cause repeated stale tool calls.
+        """
+        text = str(content or "").strip()
+        if not text:
+            return True
+        markers = (
+            "FileSystem Agent",
+            "GitHub Agent",
+            "Research Agent",
+            "OS Agent",
+            "Developer Agent",
+            "Self-Improvement Agent",
+            "Planner Agent",
+            "[EVENT BUS]",
+            "[FRIDAY WS]",
+            '"tool": "',
+        )
+        return any(marker in text for marker in markers)
+
     def get_recent_messages(self, limit: int = 20) -> list[dict[str, str]]:
         with self._get_connection() as conn:
             rows = conn.execute(
-                "SELECT role, content FROM conversation_history ORDER BY id DESC LIMIT ?", (limit,)
+                "SELECT role, content FROM conversation_history ORDER BY id DESC LIMIT ?",
+                (max(1, min(limit * 4, 200)),),
             ).fetchall()
-            return [{"role": row[0], "content": row[1]} for row in reversed(rows)]
+
+        messages = []
+        for role, content in reversed(rows):
+            if role == "assistant" and self._is_internal_trace(content):
+                continue
+            messages.append({"role": role, "content": content})
+            if len(messages) >= limit:
+                break
+        return messages
 
     def get_conversations(self, limit: int = 50) -> list[dict[str, Any]]:
         with self._get_connection() as conn:
