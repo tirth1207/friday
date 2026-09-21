@@ -18,14 +18,15 @@ def get_default_workspace() -> str:
 
 
 class Settings(BaseSettings):
-    # This is FRIDAY's private runtime/workspace root. Selected repositories are
-    # cloned below it and developer tools are scoped to those clones.
     friday_workspace: str = get_default_workspace()
 
     proactive_enabled: bool = True
     proactive_cognition_enabled: bool = True
     proactive_cognition_interval_seconds: int = 3600
     proactive_initial_delay_seconds: int = 60
+
+    proactive_osiris_enabled: bool = True
+    proactive_osiris_interval_seconds: int = 900
 
     model_config = SettingsConfigDict(
         env_file=".env",
