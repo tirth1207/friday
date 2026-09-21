@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -292,6 +293,40 @@ async def _run_github_repository_agent(user_message: str, resolved_request: str,
 _LIVE_MARKERS = ("latest", "current", "live", "today", "recent", "right now", "now", "news", "update", "updates", "what happened", "what's happening", "happening")
 _LIVE_DOMAINS = ("weather", "earthquake", "earthquakes", "wildfire", "wildfires", "flight", "flights", "satellite", "space weather", "conflict", "war", "geopolit", "market", "crypto", "cyber", "news", "f1", "formula 1")
 
+_LIVE_FRESHNESS_HOURS = 48
+
+def _extract_dates(value: Any) -> list[datetime]:
+    dates: list[datetime] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(item, (dict, list)):
+                dates.extend(_extract_dates(item))
+            elif isinstance(item, str) and any(token in str(key).lower() for token in ("date", "time", "updated", "timestamp", "published")):
+                try:
+                    raw = item.strip().replace("Z", "+00:00")
+                    parsed = datetime.fromisoformat(raw)
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=timezone.utc)
+                    dates.append(parsed.astimezone(timezone.utc))
+                except ValueError:
+                    continue
+    elif isinstance(value, list):
+        for item in value:
+            dates.extend(_extract_dates(item))
+    return dates
+
+def _live_data_is_fresh(result: dict[str, Any]) -> tuple[bool, str]:
+    dates = _extract_dates(result.get("data", result))
+    if not dates:
+        return False, "No machine-readable freshness timestamp was returned by OSIRIS."
+    newest = max(dates)
+    age_hours = (datetime.now(timezone.utc) - newest).total_seconds() / 3600
+    if age_hours < 0:
+        return True, f"Newest source timestamp: {newest.isoformat()}."
+    if age_hours <= _LIVE_FRESHNESS_HOURS:
+        return True, f"Newest source timestamp: {newest.isoformat()} ({age_hours:.1f} hours old)."
+    return False, f"Newest source timestamp: {newest.isoformat()} ({age_hours:.1f} hours old), exceeding the {_LIVE_FRESHNESS_HOURS}-hour freshness limit."
+
 def _is_live_intelligence_request(message: str) -> bool:
     text = (message or "").lower().strip()
     return any(marker in text for marker in _LIVE_MARKERS) or any(domain in text for domain in _LIVE_DOMAINS)
@@ -314,6 +349,21 @@ async def _run_osiris_live_request(user_message: str) -> str:
     except Exception:
         return await _run_structured_agent(user_message, user_message, memory_store.get_recent_messages(12), None)
 
+    fresh, freshness_note = _live_data_is_fresh(result)
+    if not fresh:
+        # Never present stale OSIRIS records as current. Fall back to the research
+        # agent so it can use the web research tools exposed by FRIDAY.
+        research_request = (
+            f"{user_message}\n\n"
+            f"OSIRIS freshness check: {freshness_note}\n"
+            "The OSIRIS result is stale or undated. Do not use it as current evidence. "
+            "Use research.web.search to verify the current situation from reliable, dated sources. "
+            "Return a concise factual answer with source dates and links."
+        )
+        return await _run_structured_agent(
+            research_request, research_request, memory_store.get_recent_messages(12), None
+        )
+
     evidence = json.dumps(result, ensure_ascii=False, default=str)[:_MAX_CONTEXT_CHARS]
     prompt = f"""You are FRIDAY answering a live-information request.
 
@@ -323,7 +373,10 @@ User request:
 OSIRIS live source response:
 {evidence}
 
-Answer directly from the returned data. Do not invent facts. Preserve useful dates, timestamps, and source URLs. If no matching result exists, say so. Do not claim breaking/latest beyond what the data supports. If the data is stale or empty, state that limitation. Never mention private reasoning or tool internals."""
+Freshness verification:
+{freshness_note}
+
+Answer directly from the returned data. Do not invent facts. Preserve useful dates, timestamps, and source URLs. Only call the information current/live because the freshness check passed. If no matching result exists, say so. Never mention private reasoning or tool internals."""
     response = await get_model(require_tools=False).ainvoke(
         [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)]
     )
