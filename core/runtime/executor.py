@@ -1,4 +1,7 @@
 from inspect import isawaitable
+import hashlib
+import json
+import time
 from typing import Any
 
 from core.agents.runtime import agent_runtime
@@ -36,6 +39,18 @@ class ToolExecutor:
             await agent_runtime.tool_error(agent=agent, tool=tool_name, description=error_msg, metadata={"error": error_msg, "requires_confirmation": True})
             raise PermissionError(error_msg)
 
+        cacheable = required_permission == PermissionLevel.SAFE
+        if cacheable:
+            cached = _read_only_cache.get(tool_name, arguments)
+            if cached is not None:
+                await agent_runtime.complete_tool(
+                    agent=agent,
+                    tool=tool_name,
+                    description="Reused identical recent read-only result.",
+                    metadata={"cached": True},
+                )
+                return cached
+
         await agent_runtime.start_tool(
             agent=agent,
             tool=tool_name,
@@ -66,11 +81,51 @@ class ToolExecutor:
                 description="Tool execution completed successfully.",
                 metadata=safe_metadata,
             )
+            if cacheable:
+                _read_only_cache.put(tool_name, arguments, result)
             return result
         except Exception as error:
             error_text = str(error)
             await agent_runtime.tool_error(agent=agent, tool=tool_name, description=error_text, metadata={"error": error_text[:500]})
             raise
+
+
+class _ReadOnlyToolCache:
+    """Short-lived request-process cache for identical safe tool calls.
+
+    This prevents duplicate read-only calls (for example two identical web
+    searches) from being executed back-to-back by the planner/model.
+    """
+
+    def __init__(self, ttl_seconds: float = 30.0):
+        self.ttl_seconds = ttl_seconds
+        self._entries: dict[str, tuple[float, Any]] = {}
+
+    def _key(self, tool_name: str, arguments: dict[str, Any]) -> str:
+        payload = json.dumps(
+            {"tool": tool_name, "arguments": arguments},
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def get(self, tool_name: str, arguments: dict[str, Any]) -> Any:
+        key = self._key(tool_name, arguments)
+        entry = self._entries.get(key)
+        if not entry:
+            return None
+        created, result = entry
+        if time.monotonic() - created > self.ttl_seconds:
+            self._entries.pop(key, None)
+            return None
+        return result
+
+    def put(self, tool_name: str, arguments: dict[str, Any], result: Any) -> None:
+        self._entries[self._key(tool_name, arguments)] = (time.monotonic(), result)
+
+
+_read_only_cache = _ReadOnlyToolCache()
 
 
 tool_executor = ToolExecutor()
