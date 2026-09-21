@@ -22,6 +22,7 @@ from core.proactive.interests import interest_store
 from core.orchestrator_structured import ask_friday
 from services.api.websocket import friday_websocket
 from providers.nvidia.health import snapshot as nvidia_health_snapshot
+from core.tier0 import handle as tier0_handle
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -382,8 +383,14 @@ async def chat(request: ChatRequest):
             memory_store.add_message("assistant", response)
             return {"response": response, "repository": repository, "developer_run": result}
 
+        tier0_response = await tier0_handle(request.message)
+        if tier0_response is not None:
+            memory_store.add_message("user", request.message)
+            memory_store.add_message("assistant", tier0_response)
+            return {"response": tier0_response, "repository": repository, "tier": 0}
+
         response = await ask_friday(request.message, repository=repository)
-        return {"response": response, "repository": repository}
+        return {"response": response, "repository": repository, "tier": 1}
     except Exception as error:
         print(f"[FRIDAY] Chat error: {type(error).__name__}: {error}")
         return {"response": _provider_error_message(error), "error": str(error).strip(), "error_type": type(error).__name__, "status": "ai_unavailable"}
