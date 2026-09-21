@@ -26,6 +26,7 @@ from core.runtime.executor import tool_executor
 from core.runtime.langchain_tools import get_langchain_tools, registry_tool_name, serialize_tool_result
 from providers.nvidia.client import get_model
 from tools.github.repository_agent import github_analyze_repository
+from tools.osiris.osiris_tools import osiris_news, osiris_weather
 
 
 SYSTEM_PROMPT = """
@@ -288,6 +289,38 @@ async def _run_github_repository_agent(user_message: str, resolved_request: str,
         return _format_repository_dossier_fallback(synthesis_payload)
 
 
+_LIVE_MARKERS = ("latest", "current", "live", "today", "recent", "right now", "now", "news", "update", "updates", "what happened", "what's happening", "happening")
+_LIVE_DOMAINS = ("weather", "earthquake", "earthquakes", "wildfire", "wildfires", "flight", "flights", "satellite", "space weather", "conflict", "war", "geopolit", "market", "crypto", "cyber", "news", "f1", "formula 1")
+
+def _is_live_intelligence_request(message: str) -> bool:
+    text = (message or "").lower().strip()
+    return any(marker in text for marker in _LIVE_MARKERS) or any(domain in text for domain in _LIVE_DOMAINS)
+
+
+async def _run_osiris_live_request(user_message: str) -> str:
+    """Fetch OSIRIS first, then synthesize the live result."""
+    text = (user_message or "").lower()
+    try:
+        result = await osiris_weather() if "weather" in text else await osiris_news(query=user_message)
+    except Exception:
+        return await _run_structured_agent(user_message, user_message, memory_store.get_recent_messages(12), None)
+
+    evidence = json.dumps(result, ensure_ascii=False, default=str)[:_MAX_CONTEXT_CHARS]
+    prompt = f"""You are FRIDAY answering a live-information request.
+
+User request:
+{user_message}
+
+OSIRIS live source response:
+{evidence}
+
+Answer directly from the returned data. Do not invent facts. Preserve useful dates, timestamps, and source URLs. If no matching result exists, say so. Do not claim breaking/latest beyond what the data supports. If the data is stale or empty, state that limitation. Never mention private reasoning or tool internals."""
+    response = await get_model(require_tools=False).ainvoke(
+        [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)]
+    )
+    return _clean_model_answer(getattr(response, "content", response))
+
+
 async def ask_friday(user_message: str, repository: str | None = None) -> str:
     # resolve_request is intentionally synchronous: it reads in-memory context and returns a dict.
     # Awaiting it causes the exact runtime failure "object dict can't be used in 'await' expression".
@@ -298,6 +331,8 @@ async def ask_friday(user_message: str, repository: str | None = None) -> str:
         return await _format_repository_list()
     if _is_environment_key_request(user_message):
         return await _format_env_key_result(user_message)
+    if _is_live_intelligence_request(user_message):
+        return await _run_osiris_live_request(user_message)
     if is_tool_required(user_message):
         return await _run_structured_agent(user_message, resolved_request, recent_messages, repository)
     return await answer_conversationally(user_message, recent_messages)
