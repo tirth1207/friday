@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -376,7 +377,17 @@ async def _run_osiris_live_request(user_message: str) -> str:
         )
 
     evidence = json.dumps(result, ensure_ascii=False, default=str)[:_MAX_CONTEXT_CHARS]
+    now_utc = datetime.now(timezone.utc)
+    now_local = now_utc.astimezone(ZoneInfo("Asia/Kolkata"))
+    local_date = now_local.strftime("%A, %d %B %Y")
+    local_time = now_local.strftime("%I:%M %p").lstrip("0")
+
     prompt = f"""You are FRIDAY answering a live-information request.
+
+CURRENT TIME CONTEXT — authoritative for interpreting words like "now", "today", "tonight", "this morning", and "this evening":
+- Current date: {local_date}
+- Current local time: {local_time} IST
+- Time zone: Asia/Kolkata (IST, UTC+05:30)
 
 User request:
 {user_message}
@@ -387,7 +398,19 @@ OSIRIS live source response:
 Freshness verification:
 {freshness_note}
 
-Answer directly from the returned data. Do not invent facts. Preserve useful dates, timestamps, and source URLs. Only call the information current/live because the freshness check passed. If no matching result exists, say so. Never mention private reasoning or tool internals."""
+CRITICAL TEMPORAL ACCURACY RULES:
+1. Never confuse a day's forecast maximum/minimum with the current temperature.
+2. Distinguish CURRENT conditions from TODAY'S forecast and TONIGHT'S forecast.
+3. When the user asks "current", "now", or "how's the weather", lead with the current observation if the source provides one.
+4. Explicitly state the relevant date and local time when reporting a current observation, e.g. "As of 10:31 PM IST on Monday, 21 September 2026..."
+5. If the source only contains a daily forecast and no current observation, say that clearly instead of presenting the forecast high as current.
+6. If the source timestamp is in UTC, convert it to Asia/Kolkata before presenting it.
+7. Never call a daytime high "the current temperature" at night. Likewise, do not call a nighttime low the current temperature during the day.
+8. For weather, prefer a concise structure: current conditions → today's high/low → tonight/tomorrow outlook, with dates attached where ambiguity is possible.
+9. Do not invent a current observation, time, weather condition, humidity, or wind value that is absent from the source.
+10. If different source timestamps disagree, prefer the newest valid observation and mention the timestamp rather than silently mixing observations.
+
+Answer directly from the returned data. Do not invent facts. Preserve useful dates, timestamps, and source URLs. Only call the information current/live because the freshness check passed. Never mention private reasoning or tool internals."""
     response = await get_model(require_tools=False).ainvoke(
         [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)]
     )
